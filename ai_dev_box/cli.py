@@ -13,6 +13,7 @@ from .container import (
     remove_port,
     run_container,
 )
+from .installers import INSTALLERS, get_installer
 
 
 # ── Subcommand handlers ────────────────────────────────────────────────────────
@@ -39,6 +40,23 @@ def cmd_list(args):
 
 def cmd_delete(args):
     delete_container(args.name, force=args.force)
+
+
+def cmd_install(args):
+    try:
+        installer = get_installer(args.package)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    installer.install(args.name)
+
+
+def cmd_packages(args):
+    print(f"{'PACKAGE':<20} DESCRIPTION")
+    print("-" * 70)
+    for name, cls in sorted(INSTALLERS.items()):
+        inst = cls()
+        print(f"{name:<20} {inst.description}")
 
 
 def cmd_port(args):
@@ -78,11 +96,13 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  ai-dev-box new mybox            Create a new sandbox named 'mybox'
-  ai-dev-box run mybox            Open a shell in 'mybox'
-  ai-dev-box list                 List all sandboxes
-  ai-dev-box delete mybox         Delete a sandbox
-  ai-dev-box port add mybox 9000  Expose container port 9000 on host
+  ai-dev-box new mybox              Create a new sandbox named 'mybox'
+  ai-dev-box install mybox openclaw Install openclaw (local-AI configured)
+  ai-dev-box run mybox              Open a shell in 'mybox'
+  ai-dev-box list                   List all sandboxes
+  ai-dev-box delete mybox           Delete a sandbox
+  ai-dev-box packages               List installable packages
+  ai-dev-box port add mybox 9000    Expose container port 9000 on host
 """,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -131,6 +151,39 @@ examples:
         help="Skip confirmation prompt",
     )
     p_del.set_defaults(func=cmd_delete)
+
+    # ── install ────────────────────────────────────────────────────────────────
+    available_pkgs = ", ".join(sorted(INSTALLERS))
+    p_install = sub.add_parser(
+        "install",
+        help="Install a pre-configured package into a sandbox",
+        description=(
+            "Install a package into a sandbox with opinionated defaults.\n\n"
+            "Packages are configured to prefer local AI providers\n"
+            "(lemonade-server, ollama) over cloud services.\n\n"
+            f"Available packages: {available_pkgs}"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  ai-dev-box install mybox openclaw\n"
+            "  ai-dev-box packages            (list all installable packages)\n"
+        ),
+    )
+    p_install.add_argument("name", help="Sandbox name")
+    p_install.add_argument(
+        "package",
+        help=f"Package to install ({available_pkgs})",
+    )
+    p_install.set_defaults(func=cmd_install)
+
+    # ── packages ───────────────────────────────────────────────────────────────
+    p_pkgs = sub.add_parser(
+        "packages",
+        help="List available installable packages",
+        aliases=["pkgs"],
+    )
+    p_pkgs.set_defaults(func=cmd_packages)
 
     # ── port ───────────────────────────────────────────────────────────────────
     p_port = sub.add_parser("port", help="Manage port proxies for a sandbox")
