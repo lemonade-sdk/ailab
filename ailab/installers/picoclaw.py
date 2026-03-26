@@ -1,4 +1,4 @@
-"""Installer for picoclaw inside an ai-dev-box container."""
+"""Installer for picoclaw inside an ailab container."""
 
 import importlib.resources
 
@@ -30,7 +30,7 @@ class PicoClawInstaller:
         if _container_status(cname) == "missing":
             raise RuntimeError(
                 f"Container '{container_name}' not found. "
-                f"Create it first with: ai-dev-box new {container_name}"
+                f"Create it first with: ailab new {container_name}"
             )
 
         if _container_status(cname) != "running":
@@ -58,7 +58,7 @@ class PicoClawInstaller:
         print(f"picoclaw installed in '{container_name}'.")
         print()
         print(f"  Config:   {cfg_dir}/config.json")
-        print(f"  Start:    ai-dev-box run {container_name}")
+        print(f"  Start:    ailab run {container_name}")
         print("  WebUI:    picoclaw-launcher")
         print("  Chat:     picoclaw agent")
         print(f"  Web UI:   http://localhost:{PICOCLAW_WEBUI_PORT}")
@@ -86,18 +86,18 @@ VERSION=$(printf '%s' "$RELEASE_JSON" | grep '"tag_name"' | head -1 \
   | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
 if [ -z "$VERSION" ]; then
-  echo "ai-dev-box: could not determine picoclaw release version" >&2
+  echo "ailab: could not determine picoclaw release version" >&2
   exit 1
 fi
 
-echo "ai-dev-box: picoclaw version ${VERSION}, arch ${GOARCH}"
+echo "ailab: picoclaw version ${VERSION}, arch ${GOARCH}"
 
 # Try common binary naming conventions for Go projects
 install_bin() {
   local url="$1" dest="$2"
   if curl -fsSL --connect-timeout 10 "$url" -o "$dest" 2>/dev/null; then
     chmod +x "$dest"
-    echo "ai-dev-box: installed from ${url}"
+    echo "ailab: installed from ${url}"
     return 0
   fi
   return 1
@@ -128,7 +128,7 @@ if [ "$INSTALLED" -eq 0 ]; then
         install -m 755 "$BIN" /usr/local/bin/picoclaw
         rm -rf "$TMP"
         INSTALLED=1
-        echo "ai-dev-box: installed from ${URL}"
+        echo "ailab: installed from ${URL}"
         break
       fi
     fi
@@ -137,19 +137,19 @@ if [ "$INSTALLED" -eq 0 ]; then
 fi
 
 if [ "$INSTALLED" -eq 0 ]; then
-  echo "ai-dev-box: binary download failed — trying go install..." >&2
+  echo "ailab: binary download failed — trying go install..." >&2
   if command -v go >/dev/null 2>&1; then
     GOPATH=$(mktemp -d)
     GOPATH="$GOPATH" go install github.com/sipeed/picoclaw@latest
     install -m 755 "$GOPATH/bin/picoclaw" /usr/local/bin/picoclaw
     rm -rf "$GOPATH"
   else
-    echo "ai-dev-box: go not available; install Go then: go install github.com/sipeed/picoclaw@latest" >&2
+    echo "ailab: go not available; install Go then: go install github.com/sipeed/picoclaw@latest" >&2
     exit 1
   fi
 fi
 
-echo "ai-dev-box: picoclaw installed at /usr/local/bin/picoclaw"
+echo "ailab: picoclaw installed at /usr/local/bin/picoclaw"
 
 # picoclaw-launcher is a separate binary in some releases; symlink if missing
 if ! command -v picoclaw-launcher >/dev/null 2>&1; then
@@ -176,7 +176,7 @@ fi
         )
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
-        with importlib.resources.files("ai_dev_box.scripts").joinpath("setup_picoclaw.py").open("rb") as f:
+        with importlib.resources.files("ailab.scripts").joinpath("setup_picoclaw.py").open("rb") as f:
             script_content = f.read()
 
         push_file(cname, "/tmp/setup_picoclaw.py", script_content)

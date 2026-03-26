@@ -1,4 +1,4 @@
-"""LXD container management for ai-dev-box."""
+"""LXD container management for ailab."""
 
 import importlib.resources
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CONTAINER_PREFIX = "ai-dev-box-"
+AILAB_PROJECT = "ailab"
 BASE_IMAGE = "ubuntu-daily:devel"
 
 # Ports proxied INTO the container (container localhost → host service)
@@ -26,7 +26,7 @@ INBOUND_PROXIES = [
 OUTBOUND_PROXIES = [
     ("web-3000",  3000),   # node/react dev servers
     ("web-7860",  7860),   # gradio
-    ("web-8080",  8080),   # generic (openclaw, etc.)
+    ("web-8080",  8080),   # generic
     ("web-8888",  8888),   # jupyter
     ("web-8501",  8501),   # streamlit
     ("web-9090",  9090),   # prometheus / generic
@@ -45,19 +45,23 @@ def _run(args, *, check=True, capture=False, input=None):
 
 
 def _lxc(*args, capture=False, check=True, input=None):
+    """Run an lxc command scoped to the ailab project."""
+    return _run(["lxc", "--project", AILAB_PROJECT, *args],
+                capture=capture, check=check, input=input)
+
+
+def _lxc_admin(*args, capture=False, check=True, input=None):
+    """Run an lxc command outside of any project (for project management)."""
     return _run(["lxc", *args], capture=capture, check=check, input=input)
 
 
 def _container_name(name: str) -> str:
-    if name.startswith(CONTAINER_PREFIX):
-        return name
-    return f"{CONTAINER_PREFIX}{name}"
+    """Return the container name as-is; the LXD project provides isolation."""
+    return name
 
 
-def _short_name(container_name: str) -> str:
-    if container_name.startswith(CONTAINER_PREFIX):
-        return container_name[len(CONTAINER_PREFIX):]
-    return container_name
+def _short_name(cname: str) -> str:
+    return cname
 
 
 def _current_user():
@@ -70,7 +74,7 @@ def _current_user():
 def container_config_dir(name: str, home: str) -> Path:
     """Per-container config directory on the host (also accessible inside the
     container at the same path, because the home dir is bind-mounted)."""
-    return Path(home) / ".local" / "share" / "ai-dev-box" / "containers" / name
+    return Path(home) / ".local" / "share" / "ailab" / "containers" / name
 
 
 def push_file(cname: str, remote_path: str, content: bytes | str):
@@ -91,19 +95,18 @@ def set_container_env(cname: str, env: dict[str, str], profile_name: str | None 
     /etc/profile.d/ script (survives PAM re-initialization in login shells).
 
     profile_name: base name for the profile.d file, e.g. "openclaw" →
-                  /etc/profile.d/ai-dev-box-openclaw.sh
+                  /etc/profile.d/ailab-openclaw.sh
                   Defaults to "container" if not given.
     """
     for key, value in env.items():
         _lxc("config", "set", cname, f"environment.{key}", value)
 
     tag = profile_name or "container"
-    lines = [f"# ai-dev-box: {tag} environment (auto-generated)"]
+    lines = [f"# ailab: {tag} environment (auto-generated)"]
     for key, value in env.items():
         lines.append(f'export {key}="{value}"')
     script = "\n".join(lines) + "\n"
-    dest = f"/etc/profile.d/ai-dev-box-{tag}.sh"
-    # Write via stdin to avoid shell quoting issues with paths
+    dest = f"/etc/profile.d/ailab-{tag}.sh"
     _lxc("exec", cname, "--",
          "bash", "-c", f"cat > {dest} && chmod 644 {dest}",
          input=script)
@@ -147,20 +150,27 @@ def _wait_for_ready(cname: str, timeout: int = 30):
     raise TimeoutError(f"Container {cname} not ready after {timeout}s")
 
 
-# ── Profile ───────────────────────────────────────────────────────────────────
+# ── Project and profile setup ─────────────────────────────────────────────────
 
-def ensure_lxd_profile():
-    """Create the ai-dev-box LXD profile if it doesn't exist."""
-    result = _lxc("profile", "show", "ai-dev-box", capture=True, check=False)
+def ensure_ailab_project():
+    """Create the ailab LXD project and profile if they don't exist."""
+    result = _lxc_admin("project", "show", AILAB_PROJECT, capture=True, check=False)
+    if result.returncode != 0:
+        print(f"Creating LXD project '{AILAB_PROJECT}'...")
+        # features.images=false: share images with default project (avoids re-downloading)
+        _lxc_admin("project", "create", AILAB_PROJECT,
+                   "--config", "features.images=false")
+
+    result = _lxc("profile", "show", AILAB_PROJECT, capture=True, check=False)
     if result.returncode == 0:
-        return  # already exists
+        return
 
-    print("Creating LXD profile 'ai-dev-box'...")
-    _lxc("profile", "create", "ai-dev-box")
+    print(f"Creating LXD profile '{AILAB_PROJECT}'...")
+    _lxc("profile", "create", AILAB_PROJECT)
     profile_yaml = """\
 config:
   security.nesting: "true"
-description: ai-dev-box profile
+description: ailab profile
 devices:
   eth0:
     name: eth0
@@ -171,14 +181,14 @@ devices:
     pool: default
     type: disk
 """
-    _lxc("profile", "edit", "ai-dev-box", input=profile_yaml)
+    _lxc("profile", "edit", AILAB_PROJECT, input=profile_yaml)
 
 
 # ── Container creation ────────────────────────────────────────────────────────
 
 def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | None = None):
     """
-    Create and fully configure a new ai-dev-box container.
+    Create and fully configure a new ailab container.
 
     extra_outbound_ports: list of (host_port, container_port) tuples to add
                           in addition to the defaults.
@@ -191,11 +201,11 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
         print(f"Container '{name}' already exists (status: {status}).")
         sys.exit(1)
 
-    ensure_lxd_profile()
+    ensure_ailab_project()
 
     # ── Launch ────────────────────────────────────────────────────────────────
     print(f"Launching container '{cname}' from {BASE_IMAGE}...")
-    _lxc("launch", BASE_IMAGE, cname, "--profile=ai-dev-box")
+    _lxc("launch", BASE_IMAGE, cname, f"--profile={AILAB_PROJECT}")
 
     # ── UID/GID passthrough so mounted homedir works ──────────────────────────
     print("Configuring UID/GID mapping...")
@@ -214,7 +224,7 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     # Lives inside the already-mounted home dir, so no extra mount is needed.
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    set_container_env(cname, {"AI_DEV_BOX_CONFIG_DIR": str(cfg_dir)},
+    set_container_env(cname, {"AILAB_CONFIG_DIR": str(cfg_dir)},
                       profile_name="base")
 
     # ── Inbound proxies: container localhost → host service ───────────────────
@@ -258,21 +268,21 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     _run_init_script(cname, username, uid, gid, home)
 
     print(f"\nContainer '{name}' is ready!")
-    print(f"  Run:   ai-dev-box run {name}")
-    print(f"  Shell: lxc exec {cname} --user {uid} -- /bin/bash -l")
+    print(f"  Run:   ailab run {name}")
+    print(f"  Shell: lxc --project {AILAB_PROJECT} exec {cname} --user {uid} -- /bin/bash -l")
 
 
 def _run_init_script(cname: str, username: str, uid: int, gid: int, home: str):
     """Push and execute the container init script."""
     print("Running container initialization (this may take a few minutes)...")
 
-    with importlib.resources.files("ai_dev_box.scripts").joinpath("container_init.sh").open("rb") as f:
+    with importlib.resources.files("ailab.scripts").joinpath("container_init.sh").open("rb") as f:
         script_content = f.read()
 
-    push_file(cname, "/tmp/ai-dev-box-init.sh", script_content)
+    push_file(cname, "/tmp/ailab-init.sh", script_content)
 
     _lxc("exec", cname, "--",
-         "bash", "/tmp/ai-dev-box-init.sh",
+         "bash", "/tmp/ailab-init.sh",
          username, str(uid), str(gid), home)
 
 
@@ -328,7 +338,6 @@ def remove_port(name: str, host_port: int, direction: str = "outbound"):
 def list_ports(name: str):
     """List all proxy devices on a container."""
     cname = _container_name(name)
-    # Use lxc list JSON output which includes expanded_devices
     result = _lxc("list", cname, "--format=json", capture=True, check=False)
     if result.returncode != 0:
         print(f"Container '{name}' not found.")
@@ -363,7 +372,7 @@ def run_container(name: str):
 
     status = _container_status(cname)
     if status == "missing":
-        print(f"Container '{name}' not found. Create it with: ai-dev-box new {name}")
+        print(f"Container '{name}' not found. Create it with: ailab new {name}")
         sys.exit(1)
 
     if status != "running":
@@ -373,12 +382,15 @@ def run_container(name: str):
 
     print(f"Opening shell in '{name}' as {username}...")
     os.execvp("lxc", [
-        "lxc", "exec", cname,
+        "lxc", "--project", AILAB_PROJECT,
+        "exec", cname,
         f"--user={uid}",
         f"--group={gid}",
         f"--env=HOME={home}",
         f"--env=USER={username}",
         f"--env=LOGNAME={username}",
+        f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
+        f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
         "--env=TERM=xterm-256color",
         f"--cwd={home}",
         "--",
@@ -389,24 +401,22 @@ def run_container(name: str):
 # ── List ──────────────────────────────────────────────────────────────────────
 
 def list_containers():
-    """List all ai-dev-box containers."""
-    result = _lxc("list", f"{CONTAINER_PREFIX}*", "--format=json",
-                  capture=True, check=False)
+    """List all ailab containers."""
+    result = _lxc("list", "--format=json", capture=True, check=False)
     if result.returncode != 0:
         print("No containers found (or LXD not available).")
         return
 
     containers = json.loads(result.stdout)
     if not containers:
-        print("No ai-dev-box containers found.")
-        print(f"Create one with: ai-dev-box new <name>")
+        print("No ailab containers found.")
+        print("Create one with: ailab new <name>")
         return
 
     print(f"{'NAME':<25} {'STATUS':<12} {'IPv4':<18} {'OUTBOUND PORTS'}")
     print("-" * 80)
     for c in containers:
         cname = c["name"]
-        short = _short_name(cname)
         status = c.get("status", "unknown")
         ipv4 = ""
         for net in c.get("state", {}).get("network", {}).values():
@@ -415,7 +425,6 @@ def list_containers():
                     ipv4 = addr["address"]
                     break
 
-        # Collect outbound proxy ports
         devices = c.get("expanded_devices", {})
         ports = []
         for dev_name, cfg in devices.items():
@@ -426,7 +435,7 @@ def list_containers():
                     ports.append(port)
 
         ports_str = ",".join(sorted(ports, key=int)) if ports else "-"
-        print(f"{short:<25} {status:<12} {ipv4:<18} {ports_str}")
+        print(f"{cname:<25} {status:<12} {ipv4:<18} {ports_str}")
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────

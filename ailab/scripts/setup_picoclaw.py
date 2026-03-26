@@ -2,7 +2,7 @@
 """
 Configure picoclaw with opinionated local-AI defaults.
 Probes lemonade (port 8000) and ollama (port 11434) — both are proxied
-from the host by ai-dev-box so they appear as localhost services.
+from the host by ailab so they appear as localhost services.
 
 picoclaw uses a LiteLLM-style config: model_list entries each specify a
 model_name, model (provider/model-id), api_base, and optional api_key.
@@ -86,21 +86,21 @@ def build_model_entry(model_name: str, provider_prefix: str, model_id: str,
 
 
 def main():
-    print("ai-dev-box: configuring picoclaw...")
+    print("ailab: configuring picoclaw...")
 
     lemonade_models = probe_models(LEMONADE_BASE)
     ollama_models   = probe_models(OLLAMA_BASE)
 
     if lemonade_models:
-        print(f"ai-dev-box: lemonade found — {len(lemonade_models)} model(s)")
+        print(f"ailab: lemonade found — {len(lemonade_models)} model(s)")
     else:
-        print("ai-dev-box: lemonade not reachable — pre-configuring with defaults")
+        print("ailab: lemonade not reachable — pre-configuring with defaults")
         lemonade_models = LEMONADE_STATIC_MODELS
 
     if ollama_models:
-        print(f"ai-dev-box: ollama found — {len(ollama_models)} model(s)")
+        print(f"ailab: ollama found — {len(ollama_models)} model(s)")
     else:
-        print("ai-dev-box: ollama not reachable — pre-configuring with defaults")
+        print("ailab: ollama not reachable — pre-configuring with defaults")
         ollama_models = OLLAMA_STATIC_MODELS
 
     lemonade_best = pick_best(lemonade_models) or PREFERRED_QWEN[1]  # Qwen3.5-9B-GGUF
@@ -143,7 +143,7 @@ def main():
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
 
-    print("ai-dev-box: picoclaw configured")
+    print("ailab: picoclaw configured")
     print(f"  config:   {CONFIG_FILE}")
     print(f"  primary:  lemonade-{lemonade_best}")
     print(f"  fallback: ollama-{ollama_best}")

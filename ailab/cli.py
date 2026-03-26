@@ -1,4 +1,4 @@
-"""Command-line interface for ai-dev-box."""
+"""Command-line interface for ailab."""
 
 import argparse
 import sys
@@ -87,7 +87,7 @@ def cmd_port(args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="ai-dev-box",
+        prog="ailab",
         description=(
             "Manage LXD-based AI development sandboxes.\n\n"
             "Each container is wired to seamlessly use host AI services\n"
@@ -96,13 +96,13 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  ai-dev-box new mybox              Create a new sandbox named 'mybox'
-  ai-dev-box install mybox openclaw Install openclaw (local-AI configured)
-  ai-dev-box run mybox              Open a shell in 'mybox'
-  ai-dev-box list                   List all sandboxes
-  ai-dev-box delete mybox           Delete a sandbox
-  ai-dev-box packages               List installable packages
-  ai-dev-box port add mybox 9000    Expose container port 9000 on host
+  ailab new mybox              Create a new sandbox named 'mybox'
+  ailab install mybox openclaw Install openclaw (local-AI configured)
+  ailab run mybox              Open a shell in 'mybox'
+  ailab list                   List all sandboxes
+  ailab delete mybox           Delete a sandbox
+  ailab packages               List installable packages
+  ailab port add mybox 9000    Expose container port 9000 on host
 """,
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -166,8 +166,8 @@ examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  ai-dev-box install mybox openclaw\n"
-            "  ai-dev-box packages            (list all installable packages)\n"
+            "  ailab install mybox openclaw\n"
+            "  ailab packages            (list all installable packages)\n"
         ),
     )
     p_install.add_argument("name", help="Sandbox name")

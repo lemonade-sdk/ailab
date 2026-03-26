@@ -1,5 +1,5 @@
 #!/bin/bash
-# Container initialization script for ai-dev-box
+# Container initialization script for ailab
 # Run inside the container as root to set up the environment
 set -euo pipefail
 
@@ -8,7 +8,7 @@ USER_UID="$2"
 USER_GID="$3"
 USER_HOME="$4"
 
-log() { echo "[ai-dev-box] $*"; }
+log() { echo "[ailab] $*"; }
 
 log "Initializing container for user $USERNAME (uid=$USER_UID, gid=$USER_GID)"
 
@@ -41,7 +41,9 @@ apt-get install -y -q \
     lsb-release \
     xdg-utils \
     socat \
-    netcat-openbsd
+    netcat-openbsd \
+    dbus-user-session \
+    systemd-container
 
 # ── Locale ─────────────────────────────────────────────────────────────────────
 log "Setting up locale..."
@@ -85,6 +87,12 @@ fi
 echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 0440 "/etc/sudoers.d/${USERNAME}"
 
+# Enable persistent user systemd session so apps can install user services
+loginctl enable-linger "$USERNAME" || log "Warning: loginctl enable-linger failed (non-fatal)"
+
+# Start the user's systemd session now (creates /run/user/$UID and D-Bus socket)
+systemctl start "user@${USER_UID}.service" || log "Warning: could not start user session (non-fatal)"
+
 # ── Bun ────────────────────────────────────────────────────────────────────────
 log "Installing Bun..."
 sudo -u "$USERNAME" bash -c \
@@ -99,9 +107,9 @@ sudo -u "$USERNAME" bash -c \
 
 # ── Profile / bashrc setup ────────────────────────────────────────────────────
 log "Writing shell profile additions..."
-PROFILE_SNIPPET="/etc/profile.d/ai-dev-box.sh"
+PROFILE_SNIPPET="/etc/profile.d/ailab.sh"
 cat > "$PROFILE_SNIPPET" <<'PROFILE'
-# ai-dev-box environment
+# ailab environment
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 

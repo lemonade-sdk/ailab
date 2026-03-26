@@ -1,4 +1,4 @@
-"""Installer for nullclaw inside an ai-dev-box container."""
+"""Installer for nullclaw inside an ailab container."""
 
 import importlib.resources
 
@@ -29,7 +29,7 @@ class NullclawInstaller:
         if _container_status(cname) == "missing":
             raise RuntimeError(
                 f"Container '{container_name}' not found. "
-                f"Create it first with: ai-dev-box new {container_name}"
+                f"Create it first with: ailab new {container_name}"
             )
 
         if _container_status(cname) != "running":
@@ -58,7 +58,7 @@ class NullclawInstaller:
         print(f"nullclaw installed in '{container_name}'.")
         print()
         print(f"  Config:   {cfg_dir}/config.json")
-        print(f"  Start:    ai-dev-box run {container_name}")
+        print(f"  Start:    ailab run {container_name}")
         print("  Gateway:  nullclaw gateway")
         print("  Chat:     nullclaw agent")
         print(f"  Web UI:   http://localhost:{NULLCLAW_GATEWAY_PORT}")
@@ -85,17 +85,17 @@ VERSION=$(curl -sf --connect-timeout 10 \
   | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
 if [ -z "$VERSION" ]; then
-  echo "ai-dev-box: could not determine nullclaw release version" >&2
+  echo "ailab: could not determine nullclaw release version" >&2
   exit 1
 fi
 
 BINARY="nullclaw-linux-${NCARCH}.bin"
-echo "ai-dev-box: downloading nullclaw ${VERSION} (${BINARY})..."
+echo "ailab: downloading nullclaw ${VERSION} (${BINARY})..."
 curl -fsSL \
   "https://github.com/nullclaw/nullclaw/releases/download/${VERSION}/${BINARY}" \
   -o /usr/local/bin/nullclaw
 chmod +x /usr/local/bin/nullclaw
-echo "ai-dev-box: nullclaw installed at /usr/local/bin/nullclaw"
+echo "ailab: nullclaw installed at /usr/local/bin/nullclaw"
 """
         _lxc("exec", cname, "--", "bash", "-c", install_script)
 
@@ -109,7 +109,7 @@ echo "ai-dev-box: nullclaw installed at /usr/local/bin/nullclaw"
         )
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
-        with importlib.resources.files("ai_dev_box.scripts").joinpath("setup_nullclaw.sh").open("rb") as f:
+        with importlib.resources.files("ailab.scripts").joinpath("setup_nullclaw.sh").open("rb") as f:
             script_content = f.read()
 
         push_file(cname, "/tmp/setup_nullclaw.sh", script_content)

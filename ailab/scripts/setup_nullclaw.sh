@@ -1,7 +1,7 @@
 #!/bin/sh
 # Configure nullclaw with opinionated local-AI defaults.
 # Probes lemonade (port 8000) and ollama (port 11434) — both are proxied
-# from the host by ai-dev-box so they appear as localhost services.
+# from the host by ailab so they appear as localhost services.
 # Adapted from ubuclaw/snap/local/bin/setup-providers (non-snap version).
 set -eu
 
@@ -76,7 +76,7 @@ mistral"
 
 # ── Probe ─────────────────────────────────────────────────────────────────────
 
-printf 'ai-dev-box: configuring nullclaw...\n'
+printf 'ailab: configuring nullclaw...\n'
 
 LEMONADE_MODELS=$(probe_models "http://localhost:8000/api/v1" || true)
 OLLAMA_MODELS=$(probe_models "http://localhost:11434/v1" || true)
@@ -87,18 +87,18 @@ OLLAMA_LIVE=0
 if [ -n "$LEMONADE_MODELS" ]; then
     LEMONADE_LIVE=1
     LCOUNT=$(printf '%s\n' "$LEMONADE_MODELS" | grep -c . || true)
-    printf 'ai-dev-box: lemonade found — %s model(s)\n' "$LCOUNT"
+    printf 'ailab: lemonade found — %s model(s)\n' "$LCOUNT"
 else
-    printf 'ai-dev-box: lemonade not reachable — pre-configuring with defaults\n'
+    printf 'ailab: lemonade not reachable — pre-configuring with defaults\n'
     LEMONADE_MODELS="$LEMONADE_STATIC"
 fi
 
 if [ -n "$OLLAMA_MODELS" ]; then
     OLLAMA_LIVE=1
     OCOUNT=$(printf '%s\n' "$OLLAMA_MODELS" | grep -c . || true)
-    printf 'ai-dev-box: ollama found — %s model(s)\n' "$OCOUNT"
+    printf 'ailab: ollama found — %s model(s)\n' "$OCOUNT"
 else
-    printf 'ai-dev-box: ollama not reachable — pre-configuring with defaults\n'
+    printf 'ailab: ollama not reachable — pre-configuring with defaults\n'
     OLLAMA_MODELS="$OLLAMA_STATIC"
 fi
 
@@ -138,7 +138,7 @@ cat > "$CONFIG_FILE" <<NULLCLAW_CFG
 }
 NULLCLAW_CFG
 
-printf 'ai-dev-box: nullclaw configured\n'
+printf 'ailab: nullclaw configured\n'
 printf '  config:   %s\n' "$CONFIG_FILE"
 printf '  primary:  %s\n' "$PRIMARY"
 printf '  fallback: %s\n' "$FALLBACK_MODEL"

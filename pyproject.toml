@@ -3,20 +3,20 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-dev-box"
+name = "ailab"
 version = "0.1.0"
-description = "LXD-based AI development sandbox manager"
+description = "LXD-based sandboxes for running AI tools safely on Ubuntu"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-keywords = ["lxd", "ai", "sandbox", "development", "ollama", "lemonade"]
+license = { text = "GPL-3.0-or-later" }
+keywords = ["lxd", "ai", "sandbox", "ollama", "lemonade", "openclaw"]
 
 [project.scripts]
-ai-dev-box = "ai_dev_box.cli:main"
+ailab = "ailab.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ai_dev_box*"]
+include = ["ailab*"]
 
 [tool.setuptools.package-data]
-"ai_dev_box.scripts" = ["*.sh", "*.js", "*.py"]
+"ailab.scripts" = ["*.sh", "*.js", "*.py"]

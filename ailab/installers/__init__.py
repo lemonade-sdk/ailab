@@ -1,4 +1,4 @@
-"""Installer registry for ai-dev-box."""
+"""Installer registry for ailab."""
 
 from .nullclaw import NullclawInstaller
 from .openclaw import OpenclawInstaller

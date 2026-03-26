@@ -97,7 +97,7 @@ function modelScore(id) {
 }
 
 async function main() {
-  console.log('ai-dev-box: configuring openclaw...');
+  console.log('ailab: configuring openclaw...');
 
   // Probe lemonade via the Ollama API.
   const rawModels = await probeOllamaModels(LEMONADE.baseUrl);
@@ -108,10 +108,10 @@ async function main() {
   if (rawModels) {
     live = true;
     models = rawModels;
-    console.log(`ai-dev-box: lemonade found — ${models.length} model(s): ${models.map(m => m.name || m.id).join(', ')}`);
+    console.log(`ailab: lemonade found — ${models.length} model(s): ${models.map(m => m.name || m.id).join(', ')}`);
   } else {
     models = LEMONADE_STATIC_MODELS;
-    console.log('ai-dev-box: lemonade not reachable — pre-configuring with defaults');
+    console.log('ailab: lemonade not reachable — pre-configuring with defaults');
     console.log('  (config will be ready once lemonade-server starts on the host)');
   }
 
@@ -169,7 +169,7 @@ async function main() {
   fs.mkdirSync(WORKSPACE,  { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + '\n');
 
-  console.log('ai-dev-box: openclaw configured');
+  console.log('ailab: openclaw configured');
   console.log(`  config:  ${CONFIG_FILE}`);
   console.log(`  primary: ${primary}`);
   console.log('');
@@ -179,6 +179,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error(`ai-dev-box: setup_openclaw failed: ${err.message}`);
+  console.error(`ailab: setup_openclaw failed: ${err.message}`);
   process.exit(1);
 });

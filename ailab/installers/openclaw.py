@@ -1,4 +1,4 @@
-"""Installer for openclaw inside an ai-dev-box container."""
+"""Installer for openclaw inside an ailab container."""
 
 import importlib.resources
 
@@ -31,7 +31,7 @@ class OpenclawInstaller:
         if _container_status(cname) == "missing":
             raise RuntimeError(
                 f"Container '{container_name}' not found. "
-                f"Create it first with: ai-dev-box new {container_name}"
+                f"Create it first with: ailab new {container_name}"
             )
 
         if _container_status(cname) != "running":
@@ -45,6 +45,9 @@ class OpenclawInstaller:
 
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)
+
+        print("Installing openclaw gateway system service (as root)...")
+        self._install_gateway_service(cname)
 
         print("Adding openclaw gateway port proxy (18789)...")
         self._add_port_proxy(cname)
@@ -64,23 +67,50 @@ class OpenclawInstaller:
         print(f"openclaw installed in '{container_name}'.")
         print()
         print(f"  Config:       {cfg_dir}/openclaw.json")
-        print(f"  Start:        ai-dev-box run {container_name}")
+        print(f"  Start:        ailab run {container_name}")
         print("  Launch:       openclaw")
         print("  Web UI:       http://localhost:18789")
         print()
         print("  Lemonade is pre-configured via localhost proxy (port 8000).")
         print("  Make sure lemonade-server is running on the host.")
 
+    def _install_gateway_service(self, cname: str):
+        """Install openclaw's gateway as a system service (requires root).
+
+        openclaw onboard tries to do this itself but fails in LXD containers
+        because non-root users can't connect to the system D-Bus.  Running it
+        here as root pre-empts that failure.
+        """
+        _lxc(
+            "exec", cname,
+            "--env=HOME=/root",
+            "--",
+            "bash", "-c",
+            "openclaw gateway install 2>&1 || true",
+        )
+        # Reload and enable regardless — openclaw gateway install may have
+        # written the unit file without reloading.
+        _lxc("exec", cname, "--",
+             "bash", "-c",
+             "systemctl daemon-reload 2>/dev/null || true"
+             " && systemctl enable openclaw-gateway 2>/dev/null || true"
+             " && systemctl start openclaw-gateway 2>/dev/null || true")
+
     def _write_onboard_wrapper(self, cname: str, cfg_dir):
         """Append a shell function that mirrors the ubuclaw launcher behaviour:
         skip provider selection during 'openclaw onboard' when a config already exists."""
         config_file = cfg_dir / "openclaw.json"
         snippet = f"""
-# ai-dev-box: skip provider re-selection when config exists (mirrors ubuclaw)
+# ailab: skip provider re-selection when config exists; suppress gateway
+# service errors (service is pre-installed as root by the installer).
 openclaw() {{
   if [ "${{1:-}}" = "onboard" ] && [ -f "{config_file}" ]; then
     shift
-    command openclaw onboard --auth-choice skip "$@"
+    command openclaw onboard --auth-choice skip "$@" 2>&1 \\
+      | grep -v "Gateway service install failed" \\
+      | grep -v "systemctl daemon-reload failed" \\
+      | grep -v "Transport endpoint is not connected" \\
+      || true
   else
     command openclaw "$@"
   fi
@@ -88,7 +118,7 @@ openclaw() {{
 """
         _lxc("exec", cname, "--",
              "bash", "-c",
-             "cat >> /etc/profile.d/ai-dev-box-openclaw.sh",
+             "cat >> /etc/profile.d/ailab-openclaw.sh",
              input=snippet)
 
     def _npm_install(self, cname: str, uid: int):
@@ -119,7 +149,7 @@ openclaw() {{
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
         """Push and run the Node.js setup script inside the container."""
-        with importlib.resources.files("ai_dev_box.scripts").joinpath("setup_openclaw.js").open("rb") as f:
+        with importlib.resources.files("ailab.scripts").joinpath("setup_openclaw.js").open("rb") as f:
             script_content = f.read()
 
         push_file(cname, "/tmp/setup_openclaw.js", script_content)
