@@ -75,14 +75,29 @@ def container_config_dir(name: str, home: str) -> Path:
     return Path(home) / ".local" / "share" / "ai-dev-box" / "containers" / name
 
 
-def set_container_env(cname: str, env: dict[str, str]):
-    """Persist environment variables in the container via LXD config.
+def set_container_env(cname: str, env: dict[str, str], profile_name: str | None = None):
+    """Persist environment variables in the container.
 
-    Variables set this way are available to every 'lxc exec' call without
-    needing to source a profile script, and survive container restarts.
+    Sets them via both LXD config (available to lxc exec calls) and a
+    /etc/profile.d/ script (survives PAM re-initialization in login shells).
+
+    profile_name: base name for the profile.d file, e.g. "openclaw" →
+                  /etc/profile.d/ai-dev-box-openclaw.sh
+                  Defaults to "container" if not given.
     """
     for key, value in env.items():
         _lxc("config", "set", cname, f"environment.{key}", value)
+
+    tag = profile_name or "container"
+    lines = [f"# ai-dev-box: {tag} environment (auto-generated)"]
+    for key, value in env.items():
+        lines.append(f'export {key}="{value}"')
+    script = "\n".join(lines) + "\n"
+    dest = f"/etc/profile.d/ai-dev-box-{tag}.sh"
+    # Write via stdin to avoid shell quoting issues with paths
+    _lxc("exec", cname, "--",
+         "bash", "-c", f"cat > {dest} && chmod 644 {dest}",
+         input=script)
 
 
 def _container_status(cname: str) -> str:
@@ -190,7 +205,8 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     # Lives inside the already-mounted home dir, so no extra mount is needed.
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    set_container_env(cname, {"AI_DEV_BOX_CONFIG_DIR": str(cfg_dir)})
+    set_container_env(cname, {"AI_DEV_BOX_CONFIG_DIR": str(cfg_dir)},
+                      profile_name="base")
 
     # ── Inbound proxies: container localhost → host service ───────────────────
     print("Adding inbound port proxies (container → host services)...")

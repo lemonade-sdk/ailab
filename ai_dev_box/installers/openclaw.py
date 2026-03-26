@@ -55,7 +55,7 @@ class OpenclawInstaller:
             "OPENCLAW_STATE_DIR":   str(cfg_dir),
             "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
         }
-        set_container_env(cname, env)
+        set_container_env(cname, env, profile_name="openclaw")
 
         print("Configuring openclaw (probing lemonade via Ollama API)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)

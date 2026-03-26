@@ -49,7 +49,8 @@ class PicoClawInstaller:
         self._add_port_proxy(cname)
 
         print("Setting picoclaw config env vars...")
-        set_container_env(cname, {"PICOCLAW_CONFIG_DIR": str(cfg_dir)})
+        set_container_env(cname, {"PICOCLAW_CONFIG_DIR": str(cfg_dir)},
+                          profile_name="picoclaw")
 
         print("Configuring picoclaw (probing lemonade + ollama)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)

@@ -49,7 +49,8 @@ class NullclawInstaller:
             self._add_port_proxy(cname)
 
         print("Setting nullclaw config env vars...")
-        set_container_env(cname, {"NULLCLAW_CONFIG_DIR": str(cfg_dir)})
+        set_container_env(cname, {"NULLCLAW_CONFIG_DIR": str(cfg_dir)},
+                          profile_name="nullclaw")
 
         print("Configuring nullclaw (probing lemonade + ollama)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)
