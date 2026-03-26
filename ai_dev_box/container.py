@@ -69,6 +69,22 @@ def _current_user():
     return pw.pw_name, uid, gid, pw.pw_dir
 
 
+def container_config_dir(name: str, home: str) -> Path:
+    """Per-container config directory on the host (also accessible inside the
+    container at the same path, because the home dir is bind-mounted)."""
+    return Path(home) / ".local" / "share" / "ai-dev-box" / "containers" / name
+
+
+def set_container_env(cname: str, env: dict[str, str]):
+    """Persist environment variables in the container via LXD config.
+
+    Variables set this way are available to every 'lxc exec' call without
+    needing to source a profile script, and survive container restarts.
+    """
+    for key, value in env.items():
+        _lxc("config", "set", cname, f"environment.{key}", value)
+
+
 def _container_status(cname: str) -> str:
     """Return container status string or 'missing'."""
     result = _lxc("list", cname, "--format=json", capture=True, check=False)
@@ -169,6 +185,12 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     print(f"Mounting home directory {home}...")
     _lxc("config", "device", "add", cname, "homedir", "disk",
          f"source={home}", f"path={home}")
+
+    # ── Per-container config directory ────────────────────────────────────────
+    # Lives inside the already-mounted home dir, so no extra mount is needed.
+    cfg_dir = container_config_dir(name, home)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    set_container_env(cname, {"AI_DEV_BOX_CONFIG_DIR": str(cfg_dir)})
 
     # ── Inbound proxies: container localhost → host service ───────────────────
     print("Adding inbound port proxies (container → host services)...")

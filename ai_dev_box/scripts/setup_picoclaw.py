@@ -15,7 +15,8 @@ import urllib.error
 from pathlib import Path
 
 HOME = Path.home()
-CONFIG_DIR = HOME / ".picoclaw"
+# Honour per-container config dir set by the installer; fall back to default.
+CONFIG_DIR = Path(os.environ.get("PICOCLAW_CONFIG_DIR", HOME / ".picoclaw"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
 WORKSPACE = HOME / "workspace"
 

@@ -10,6 +10,8 @@ from ..container import (
     _current_user,
     _lxc,
     _wait_for_ready,
+    container_config_dir,
+    set_container_env,
     OUTBOUND_PROXIES,
 )
 
@@ -37,23 +39,29 @@ class PicoClawInstaller:
             _lxc("start", cname)
             _wait_for_ready(cname)
 
+        cfg_dir = container_config_dir(container_name, home) / "picoclaw"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+
         print("Installing picoclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)
 
         print(f"Adding picoclaw WebUI port proxy ({PICOCLAW_WEBUI_PORT})...")
         self._add_port_proxy(cname)
 
+        print("Setting picoclaw config env vars...")
+        set_container_env(cname, {"PICOCLAW_CONFIG_DIR": str(cfg_dir)})
+
         print("Configuring picoclaw (probing lemonade + ollama)...")
-        self._run_setup(cname, uid, gid, home)
+        self._run_setup(cname, uid, gid, home, cfg_dir)
 
         print()
         print(f"picoclaw installed in '{container_name}'.")
         print()
-        print(f"  Start the container:  ai-dev-box run {container_name}")
-        print("  Start WebUI:          picoclaw-launcher")
-        print("  Interactive chat:     picoclaw agent")
-        print("  Start gateway:        picoclaw gateway")
-        print(f"  Web UI (on host):     http://localhost:{PICOCLAW_WEBUI_PORT}")
+        print(f"  Config:   {cfg_dir}/config.json")
+        print(f"  Start:    ai-dev-box run {container_name}")
+        print("  WebUI:    picoclaw-launcher")
+        print("  Chat:     picoclaw agent")
+        print(f"  Web UI:   http://localhost:{PICOCLAW_WEBUI_PORT}")
         print()
         print("  Lemonade and Ollama are pre-configured via localhost proxies.")
         print("  Make sure lemonade-server or ollama is running on the host.")
@@ -167,7 +175,7 @@ fi
             "bind=host",
         )
 
-    def _run_setup(self, cname: str, uid: int, gid: int, home: str):
+    def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
         with importlib.resources.files("ai_dev_box.scripts").joinpath("setup_picoclaw.py").open("rb") as f:
             script_content = f.read()
 
@@ -185,6 +193,7 @@ fi
             f"--user={uid}",
             f"--group={gid}",
             f"--env=HOME={home}",
+            f"--env=PICOCLAW_CONFIG_DIR={cfg_dir}",
             "--",
             "python3", "/tmp/setup_picoclaw.py",
         )

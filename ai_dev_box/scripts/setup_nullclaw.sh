@@ -5,7 +5,8 @@
 # Adapted from ubuclaw/snap/local/bin/setup-providers (non-snap version).
 set -eu
 
-CONFIG_DIR="${HOME}/.nullclaw"
+# Honour per-container config dir set by the installer; fall back to default.
+CONFIG_DIR="${NULLCLAW_CONFIG_DIR:-${HOME}/.nullclaw}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 WORKSPACE="${HOME}/workspace"
 

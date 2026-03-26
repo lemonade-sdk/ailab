@@ -10,6 +10,8 @@ from ..container import (
     _current_user,
     _lxc,
     _wait_for_ready,
+    container_config_dir,
+    set_container_env,
     OUTBOUND_PROXIES,
 )
 
@@ -36,25 +38,30 @@ class NullclawInstaller:
             _lxc("start", cname)
             _wait_for_ready(cname)
 
+        cfg_dir = container_config_dir(container_name, home) / "nullclaw"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+
         print("Installing nullclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)
 
-        # Port 3000 is already in the default OUTBOUND_PROXIES ("web-3000"),
-        # so no extra proxy device is needed.
         if not any(port == NULLCLAW_GATEWAY_PORT for _, port in OUTBOUND_PROXIES):
             print(f"Adding nullclaw gateway port proxy ({NULLCLAW_GATEWAY_PORT})...")
             self._add_port_proxy(cname)
 
+        print("Setting nullclaw config env vars...")
+        set_container_env(cname, {"NULLCLAW_CONFIG_DIR": str(cfg_dir)})
+
         print("Configuring nullclaw (probing lemonade + ollama)...")
-        self._run_setup(cname, uid, gid, home)
+        self._run_setup(cname, uid, gid, home, cfg_dir)
 
         print()
         print(f"nullclaw installed in '{container_name}'.")
         print()
-        print(f"  Start the container:  ai-dev-box run {container_name}")
-        print("  Start gateway:        nullclaw gateway")
-        print("  Interactive chat:     nullclaw agent")
-        print(f"  Web UI (on host):     http://localhost:{NULLCLAW_GATEWAY_PORT}")
+        print(f"  Config:   {cfg_dir}/config.json")
+        print(f"  Start:    ai-dev-box run {container_name}")
+        print("  Gateway:  nullclaw gateway")
+        print("  Chat:     nullclaw agent")
+        print(f"  Web UI:   http://localhost:{NULLCLAW_GATEWAY_PORT}")
         print()
         print("  Lemonade and Ollama are pre-configured via localhost proxies.")
         print("  Make sure lemonade-server or ollama is running on the host.")
@@ -101,7 +108,7 @@ echo "ai-dev-box: nullclaw installed at /usr/local/bin/nullclaw"
             "bind=host",
         )
 
-    def _run_setup(self, cname: str, uid: int, gid: int, home: str):
+    def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
         with importlib.resources.files("ai_dev_box.scripts").joinpath("setup_nullclaw.sh").open("rb") as f:
             script_content = f.read()
 
@@ -119,6 +126,7 @@ echo "ai-dev-box: nullclaw installed at /usr/local/bin/nullclaw"
             f"--user={uid}",
             f"--group={gid}",
             f"--env=HOME={home}",
+            f"--env=NULLCLAW_CONFIG_DIR={cfg_dir}",
             "--",
             "sh", "/tmp/setup_nullclaw.sh",
         )

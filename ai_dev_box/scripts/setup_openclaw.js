@@ -27,8 +27,9 @@ const LEMONADE = {
 };
 
 const HOME        = os.homedir();
-const CONFIG_DIR  = path.join(HOME, '.openclaw');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'openclaw.json');
+// Honour per-container config paths set by the installer; fall back to defaults.
+const CONFIG_DIR  = process.env.OPENCLAW_STATE_DIR  || path.join(HOME, '.openclaw');
+const CONFIG_FILE = process.env.OPENCLAW_CONFIG_PATH || path.join(CONFIG_DIR, 'openclaw.json');
 const WORKSPACE   = path.join(HOME, 'workspace');
 
 // Preferred Qwen models in priority order (highest preference first).
