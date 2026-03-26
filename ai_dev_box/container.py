@@ -80,7 +80,8 @@ def push_file(cname: str, remote_path: str, content: bytes | str):
     """
     if isinstance(content, bytes):
         content = content.decode()
-    _lxc("exec", cname, "--", "bash", "-c", f"cat > {remote_path}", input=content)
+    _lxc("exec", cname, "--", "bash", "-c",
+         f"rm -f {remote_path} && cat > {remote_path}", input=content)
 
 
 def set_container_env(cname: str, env: dict[str, str], profile_name: str | None = None):
