@@ -1,9 +1,13 @@
 """Installer registry for ai-dev-box."""
 
+from .nullclaw import NullclawInstaller
 from .openclaw import OpenclawInstaller
+from .picoclaw import PicoClawInstaller
 
 INSTALLERS: dict[str, type] = {
+    "nullclaw": NullclawInstaller,
     "openclaw": OpenclawInstaller,
+    "picoclaw": PicoClawInstaller,
 }
 
 

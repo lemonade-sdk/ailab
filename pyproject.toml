@@ -19,4 +19,4 @@ where = ["."]
 include = ["ai_dev_box*"]
 
 [tool.setuptools.package-data]
-"ai_dev_box.scripts" = ["*.sh", "*.js"]
+"ai_dev_box.scripts" = ["*.sh", "*.js", "*.py"]
