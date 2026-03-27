@@ -53,15 +53,21 @@ def probe_models(base_url: str) -> list[str] | None:
 def model_score(model_id: str) -> int:
     """Score a model for suitability as a primary chat/agent model."""
     s = model_id.lower()
-    if any(x in s for x in ("flux", "sdxl", "stable-diff")):  return -30
-    if any(x in s for x in ("kokoro", "whisper", "tts", "speech")): return -20
-    if any(x in s for x in ("embed", "retriev")):              return -20
+    if any(x in s for x in ("flux", "sdxl", "stable-diff")):
+        return -30
+    if any(x in s for x in ("kokoro", "whisper", "tts", "speech")):
+        return -20
+    if any(x in s for x in ("embed", "retriev")):
+        return -20
     score = 0
     if model_id in PREFERRED_QWEN:
         score += 100 - PREFERRED_QWEN.index(model_id)
-    if "flm"      in s: score += 20
-    if "gguf"     in s: score += 10
-    if any(x in s for x in ("instruct", "-it-", "chat")): score += 5
+    if "flm" in s:
+        score += 20
+    if "gguf" in s:
+        score += 10
+    if any(x in s for x in ("instruct", "-it-", "chat")):
+        score += 5
     return score
 
 

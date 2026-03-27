@@ -71,7 +71,8 @@ jobs:
             python3-setuptools-scm
 
       - name: Build source package (unsigned)
-        run: debuild -us -uc -S
+        # -d skips build-dep checks; not needed for source-only (-S) builds
+        run: debuild -us -uc -S -d
 
       - name: Run lintian
         run: lintian --fail-on error ../*.changes
