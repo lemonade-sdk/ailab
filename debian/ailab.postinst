@@ -4,14 +4,21 @@ set -eu
 case "$1" in
     configure)
         if ! command -v snap >/dev/null 2>&1; then
-            echo "ailab: snapd is required to install the lxd snap." >&2
+            echo "ailab: snapd is required to install the lxd and lemonade-server snaps." >&2
             exit 1
         fi
 
+        snap wait system seed.loaded >/dev/null 2>&1 || true
+
         if ! snap list lxd >/dev/null 2>&1; then
             echo "ailab: installing lxd snap..."
-            snap wait system seed.loaded >/dev/null 2>&1 || true
             snap install lxd
+        fi
+
+        if ! snap list lemonade-server >/dev/null 2>&1 \
+            && ! dpkg-query -W -f='${Status}' lemonade-server 2>/dev/null | grep -q "install ok installed"; then
+            echo "ailab: installing lemonade-server snap..."
+            snap install lemonade-server
         fi
 
         if command -v lxc >/dev/null 2>&1; then

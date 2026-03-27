@@ -1,7 +1,9 @@
 ailab is packaged as a Python application using Debian's pybuild workflow.
 
 The package depends on snapd and installs the lxd snap from its post-install
-script because Debian package dependencies cannot target an individual snap.
+script. It installs the lemonade-server snap only if lemonade-server is not
+already present as either a snap or a Debian package, because Debian package
+dependencies cannot target individual snaps.
 
 After installing the package, initialize LXD if needed:
 

@@ -24,5 +24,6 @@ Description: LXD-based sandboxes for running AI tools safely on Ubuntu
  system. Each container shares the user's home directory so files remain
  directly accessible on the host.
  .
- This package depends on snapd and installs the lxd snap during package
- configuration if it is not already present.
+ This package depends on snapd, installs the lxd snap during package
+ configuration if needed, and installs the lemonade-server snap only when
+ lemonade-server is not already installed via snap or Debian package.
