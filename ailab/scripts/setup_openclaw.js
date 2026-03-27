@@ -169,10 +169,6 @@ async function main() {
         workspace:    WORKSPACE,
         sandbox:      { mode: 'off' },
         model:        { primary: `lemonade/${primaryModel}` },
-        // Disable Qwen3 thinking mode — with --reasoning-format auto, thinking
-        // tokens are separated into reasoning_content leaving content empty,
-        // which causes openclaw to receive a blank response and do nothing.
-        systemPrompt: '/no_think',
       },
     },
   };
