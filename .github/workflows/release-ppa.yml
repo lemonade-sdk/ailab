@@ -7,8 +7,6 @@ on:
   release:
     types: [published]
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   upload-ppa:
@@ -21,7 +19,7 @@ jobs:
         distro: [noble, questing, resolute]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # Full history needed so setuptools-scm can resolve the version
           fetch-depth: 0
@@ -40,7 +38,7 @@ jobs:
             python3-setuptools-scm
 
       - name: Import GPG signing key
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
