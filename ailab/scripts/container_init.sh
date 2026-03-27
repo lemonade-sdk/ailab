@@ -127,6 +127,11 @@ fi
 # pipx
 export PATH="$PATH:$HOME/.local/bin"
 
+# bash completion
+if [ -n "${BASH_VERSION:-}" ] && [ -r /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+fi
+
 # lemonade / ollama already at localhost - no override needed (proxy handles it)
 PROFILE
 

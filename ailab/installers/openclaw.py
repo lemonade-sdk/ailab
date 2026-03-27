@@ -64,6 +64,7 @@ class OpenclawInstaller:
         }
         set_container_env(cname, env, profile_name="openclaw")
         self._write_onboard_wrapper(cname, cfg_dir)
+        self._install_shell_completion(cname, uid, gid, home, cfg_dir)
 
         print("Configuring openclaw (probing lemonade via Ollama API)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)
@@ -121,6 +122,24 @@ openclaw() {{
              "bash", "-c",
              "cat >> /etc/profile.d/ailab-openclaw.sh",
              input=snippet)
+
+    def _install_shell_completion(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
+        """Install openclaw bash completion for the container user."""
+        result = _lxc(
+            "exec", cname,
+            f"--user={uid}",
+            f"--group={gid}",
+            f"--env=HOME={home}",
+            f"--env=OPENCLAW_STATE_DIR={cfg_dir}",
+            f"--env=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json",
+            "--",
+            "bash", "-lc",
+            "openclaw completion --shell bash --install --yes",
+            check=False,
+            capture=True,
+        )
+        if result.returncode != 0:
+            print("  Warning: openclaw shell completion install failed (non-fatal)")
 
     def _npm_install(self, cname: str, uid: int):
         """Install openclaw globally via npm inside the container (as root)."""

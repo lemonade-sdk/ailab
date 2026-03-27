@@ -516,6 +516,20 @@ def list_containers():
         print(f"{cname:<25} {status:<12} {ipv4:<18} {ports_str}")
 
 
+def completion_container_names() -> list[str]:
+    """Return container names for shell completion."""
+    result = _lxc("list", "--format=json", capture=True, check=False)
+    if result.returncode != 0:
+        return []
+
+    try:
+        containers = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+
+    return sorted(c.get("name", "") for c in containers if c.get("name"))
+
+
 # ── Delete ────────────────────────────────────────────────────────────────────
 
 def delete_container(name: str, force: bool = False):

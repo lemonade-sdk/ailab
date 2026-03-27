@@ -7,9 +7,13 @@ cd "$SCRIPT_DIR"
 
 echo "Installing ailab..."
 
+COMPLETIONS="$HOME/.local/share/bash-completion/completions"
+mkdir -p "$COMPLETIONS"
+
 # pipx is the cleanest option - isolated venv, adds to PATH automatically
 if command -v pipx &>/dev/null; then
     pipx install --editable "$SCRIPT_DIR"
+    install -m 644 "$SCRIPT_DIR/ailab/scripts/ailab-completion.bash" "$COMPLETIONS/ailab"
     echo ""
     echo "Installation complete! Try:"
     echo "  ailab --help"
@@ -21,7 +25,7 @@ fi
 VENV="$HOME/.local/share/ailab/venv"
 BIN="$HOME/.local/bin"
 
-mkdir -p "$VENV" "$BIN"
+mkdir -p "$VENV" "$BIN" "$COMPLETIONS"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --editable "$SCRIPT_DIR"
 
@@ -31,6 +35,7 @@ cat > "$BIN/ailab" <<EOF
 exec "$VENV/bin/ailab" "\$@"
 EOF
 chmod +x "$BIN/ailab"
+install -m 644 "$SCRIPT_DIR/ailab/scripts/ailab-completion.bash" "$COMPLETIONS/ailab"
 
 echo ""
 echo "Installation complete!"

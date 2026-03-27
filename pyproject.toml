@@ -24,4 +24,4 @@ where = ["."]
 include = ["ailab*"]
 
 [tool.setuptools.package-data]
-"ailab.scripts" = ["*.sh", "*.js", "*.py"]
+"ailab.scripts" = ["*.sh", "*.js", "*.py", "*.bash"]

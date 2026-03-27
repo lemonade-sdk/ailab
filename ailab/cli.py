@@ -91,6 +91,31 @@ def cmd_packages(args):
         print(f"{name:<20} {inst.description}")
 
 
+def cmd_complete(args):
+    if args.kind == "packages":
+        for name in sorted(INSTALLERS):
+            print(name)
+        return
+
+    if args.kind == "commands":
+        for name in ("new", "run", "stop", "list", "ls", "delete", "rm",
+                     "install", "packages", "pkgs", "port"):
+            print(name)
+        return
+
+    if args.kind == "port-actions":
+        for name in ("add", "remove", "rm", "list", "ls"):
+            print(name)
+        return
+
+    if args.kind == "containers":
+        from .container import completion_container_names
+
+        for name in completion_container_names():
+            print(name)
+        return
+
+
 def cmd_port(args):
     if args.port_command == "add":
         try:
@@ -234,6 +259,10 @@ examples:
         aliases=["pkgs"],
     )
     p_pkgs.set_defaults(func=cmd_packages)
+
+    p_complete = sub.add_parser("_complete", help=argparse.SUPPRESS)
+    p_complete.add_argument("kind", choices=["commands", "containers", "packages", "port-actions"])
+    p_complete.set_defaults(func=cmd_complete)
 
     # ── port ───────────────────────────────────────────────────────────────────
     p_port = sub.add_parser("port", help="Manage port proxies for a sandbox")
