@@ -10,9 +10,11 @@ case "$1" in
 
         snap wait system seed.loaded >/dev/null 2>&1 || true
 
+        lxd_was_missing=0
         if ! snap list lxd >/dev/null 2>&1; then
             echo "ailab: installing lxd snap..."
             snap install lxd
+            lxd_was_missing=1
         fi
 
         if ! snap list lemonade-server >/dev/null 2>&1 \
@@ -21,11 +23,22 @@ case "$1" in
             snap install lemonade-server
         fi
 
-        if command -v lxc >/dev/null 2>&1; then
-            echo "ailab: ensure lxd is initialized with 'sudo lxd init --auto' and that your user is in the 'lxd' group." >&2
-        else
-            echo "ailab: lxd snap installed, but the lxc command is not yet available on PATH." >&2
-            echo "ailab: reboot, then run 'lxd init --auto'." >&2
+        # Initialise LXD if we just installed it (lxc will now be on PATH)
+        if [ "$lxd_was_missing" = "1" ] && command -v lxc >/dev/null 2>&1; then
+            echo "ailab: initialising lxd..."
+            lxd init --auto
+        fi
+
+        # Add every member of the 'users' group to the 'lxd' group
+        if getent group users >/dev/null 2>&1 && getent group lxd >/dev/null 2>&1; then
+            users_members=$(getent group users | cut -d: -f4)
+            for user in $(echo "$users_members" | tr ',' ' '); do
+                if [ -n "$user" ] && ! id -nG "$user" 2>/dev/null | grep -qw lxd; then
+                    echo "ailab: adding $user to the lxd group..."
+                    usermod -aG lxd "$user"
+                fi
+            done
+            echo "ailab: users added to the lxd group will need to reboot before using ailab."
         fi
         ;;
 esac
