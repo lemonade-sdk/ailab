@@ -243,7 +243,7 @@ lxc --project ailab exec mybox -- bash
 
 ## License
 
-Copyright (C) 2025 Ken VanDine and contributors
+Copyright (C) 2026 Ken VanDine and contributors
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
