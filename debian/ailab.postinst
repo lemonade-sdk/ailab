@@ -25,7 +25,7 @@ case "$1" in
             echo "ailab: ensure lxd is initialized with 'sudo lxd init --auto' and that your user is in the 'lxd' group." >&2
         else
             echo "ailab: lxd snap installed, but the lxc command is not yet available on PATH." >&2
-            echo "ailab: log out and back in, then run 'sudo lxd init --auto'." >&2
+            echo "ailab: reboot, then run 'lxd init --auto'." >&2
         fi
         ;;
 esac
