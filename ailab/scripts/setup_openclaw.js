@@ -70,10 +70,12 @@ function httpRequest(method, url, body) {
   });
 }
 
-// Probe lemonade's Ollama-compatible /api/tags endpoint.
-async function probeOllamaModels(baseUrl) {
+// Probe lemonade via the Ollama /api/tags endpoint — this returns all available
+// models (including undownloaded ones), unlike the OpenAI /models endpoint which
+// only lists already-downloaded models.
+async function probeOllamaModels() {
   try {
-    const body = await httpRequest('GET', `${baseUrl}/api/tags`);
+    const body = await httpRequest('GET', 'http://localhost:8000/api/tags');
     const data = JSON.parse(body).models || [];
     return data.length > 0 ? data : null;
   } catch {
@@ -81,9 +83,9 @@ async function probeOllamaModels(baseUrl) {
   }
 }
 
-async function pullLemonadeModel(baseUrl, modelName) {
+async function pullLemonadeModel(modelName) {
   try {
-    await httpRequest('POST', `${baseUrl}/api/v1/pull`, { model_name: modelName });
+    await httpRequest('POST', 'http://localhost:8000/api/v1/pull', { model_name: modelName });
     return true;
   } catch {
     return false;
@@ -103,7 +105,7 @@ async function main() {
   console.log('ailab: configuring openclaw...');
 
   // Probe lemonade via the Ollama API.
-  const rawModels = await probeOllamaModels(LEMONADE.baseUrl);
+  const rawModels = await probeOllamaModels();
 
   let modelIds = [];
   let primaryModel = FALLBACK_MODEL;
@@ -124,7 +126,7 @@ async function main() {
     primaryModel = preferredModel;
   } else {
     if (!downloadedIds.has(FALLBACK_MODEL)) {
-      const pullStarted = await pullLemonadeModel(LEMONADE.baseUrl, FALLBACK_MODEL);
+      const pullStarted = await pullLemonadeModel(FALLBACK_MODEL);
       if (pullStarted) {
         console.log(`ailab: requested lemonade download for fallback model ${FALLBACK_MODEL}`);
       } else if (rawModels) {
@@ -140,8 +142,8 @@ async function main() {
     reasoning:     false,
     input:         ['text'],
     cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32768,
-    maxTokens:     4096,
+    contextWindow: 4096,
+    maxTokens:     2048,
   }));
 
   const config = {
