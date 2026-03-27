@@ -21,6 +21,7 @@ NULLCLAW_GATEWAY_PORT = 3000
 class NullclawInstaller:
     name = "nullclaw"
     description = "Lightweight static-binary AI agent gateway (local-first, Zig-built)"
+    onboard_cmd = None
 
     def install(self, container_name: str):
         cname = _container_name(container_name)

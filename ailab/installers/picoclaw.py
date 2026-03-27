@@ -22,6 +22,7 @@ PICOCLAW_PROXY_DEVICE = "proxy-out-picoclaw"
 class PicoClawInstaller:
     name = "picoclaw"
     description = "Ultra-lightweight Go-based AI agent gateway (local-first, 30+ providers)"
+    onboard_cmd = None
 
     def install(self, container_name: str):
         cname = _container_name(container_name)

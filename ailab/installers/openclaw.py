@@ -22,6 +22,7 @@ OPENCLAW_PROXY_DEVICE = "proxy-out-openclaw"
 class OpenclawInstaller:
     name = "openclaw"
     description = "AI coding agent with local-first LLM support (lemonade/ollama)"
+    onboard_cmd = "openclaw onboard"
 
     def install(self, container_name: str):
         """Install and configure openclaw in the named container."""

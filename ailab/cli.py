@@ -27,7 +27,34 @@ def cmd_new(args):
         except ValueError:
             print(f"Invalid port spec '{spec}'. Use HOST_PORT:CONTAINER_PORT")
             sys.exit(1)
+
+    # Validate any --install packages before doing any work
+    installers = []
+    for pkg in args.install or []:
+        try:
+            installers.append(get_installer(pkg))
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
     create_container(args.name, extra_outbound_ports=extra or None)
+
+    if not installers:
+        return
+
+    for installer in installers:
+        print()
+        installer.install(args.name)
+
+    # Collect onboard commands from packages that have them
+    post_cmds = [i.onboard_cmd for i in installers if i.onboard_cmd]
+
+    print()
+    if post_cmds:
+        print("Dropping into container for onboarding...")
+    else:
+        print("Dropping into container...")
+    run_container(args.name, post_cmds=post_cmds or None)
 
 
 def cmd_run(args):
@@ -86,6 +113,8 @@ def cmd_port(args):
 # ── Parser ────────────────────────────────────────────────────────────────────
 
 def build_parser():
+    available_pkgs = ", ".join(sorted(INSTALLERS))
+
     parser = argparse.ArgumentParser(
         prog="ailab",
         description=(
@@ -131,6 +160,17 @@ examples:
         action="append",
         help="Extra port to forward from container to host (can repeat)",
     )
+    p_new.add_argument(
+        "--install", "-i",
+        metavar="PACKAGE",
+        action="append",
+        help=(
+            "Install a package after creation (can repeat). "
+            "Packages with an onboard step run it automatically, "
+            "then drops into an interactive shell. "
+            f"Available: {available_pkgs}"
+        ),
+    )
     p_new.set_defaults(func=cmd_new)
 
     # ── run ────────────────────────────────────────────────────────────────────
@@ -153,7 +193,6 @@ examples:
     p_del.set_defaults(func=cmd_delete)
 
     # ── install ────────────────────────────────────────────────────────────────
-    available_pkgs = ", ".join(sorted(INSTALLERS))
     p_install = sub.add_parser(
         "install",
         help="Install a pre-configured package into a sandbox",

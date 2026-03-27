@@ -365,8 +365,14 @@ def list_ports(name: str):
 
 # ── Run / shell ───────────────────────────────────────────────────────────────
 
-def run_container(name: str):
-    """Start the container (if needed) and open a user shell."""
+def run_container(name: str, post_cmds: list[str] | None = None):
+    """Start the container (if needed) and open a user shell.
+
+    post_cmds: optional shell commands to run before the interactive shell,
+               e.g. ["openclaw onboard"].  Each command runs in sequence; if
+               one exits non-zero the shell still opens.  The final shell is
+               a login shell so profile.d wrappers are active.
+    """
     cname = _container_name(name)
     username, uid, gid, home = _current_user()
 
@@ -381,6 +387,15 @@ def run_container(name: str):
         _wait_for_ready(cname)
 
     print(f"Opening shell in '{name}' as {username}...")
+
+    if post_cmds:
+        # Run each onboard command then exec a login shell so the user lands
+        # in an interactive prompt.  Use '; ' so a failing step doesn't abort.
+        chain = "; ".join(post_cmds)
+        exec_argv = ["/bin/bash", "--login", "-c", f"{chain}; exec bash --login"]
+    else:
+        exec_argv = ["/bin/bash", "--login"]
+
     os.execvp("lxc", [
         "lxc", "--project", AILAB_PROJECT,
         "exec", cname,
@@ -394,7 +409,7 @@ def run_container(name: str):
         "--env=TERM=xterm-256color",
         f"--cwd={home}",
         "--",
-        "/bin/bash", "--login",
+        *exec_argv,
     ])
 
 
