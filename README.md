@@ -13,8 +13,8 @@ while keeping installed software isolated from the rest of your system.
 - **Your files, always accessible** — home directory is shared into every container
 - **Local AI, zero config** — lemonade-server and ollama are automatically available
   inside containers on `localhost`, proxied from the host
-- **One-command installs** — `ailab install mybox openclaw` configures the tool
-  with local-first AI settings out of the box
+- **One command, fully configured** — `ailab new mybox --install openclaw` creates
+  a container, installs the tool, runs onboarding, and drops you into a shell
 - **Web UIs in your browser** — common ports are forwarded so you can open web
   interfaces at `http://localhost:PORT` from your host browser
 - **Organised in one place** — all ailab containers live in an LXD project named
@@ -53,17 +53,16 @@ source ~/.bashrc
 ## Quick Start
 
 ```bash
-# Create a new sandbox
-ailab new mybox
+# Create a sandbox with openclaw installed — runs onboarding then drops to a shell
+ailab new mybox --install openclaw
+```
 
-# Install openclaw (AI coding assistant) configured for local models
-ailab install mybox openclaw
+Or step by step:
 
-# Open a shell inside the sandbox
-ailab run mybox
-
-# Inside the sandbox, run openclaw
-openclaw
+```bash
+ailab new mybox               # create sandbox
+ailab install mybox openclaw  # install and configure openclaw
+ailab run mybox               # open a shell
 ```
 
 ## Commands
@@ -81,8 +80,14 @@ Create a new sandbox container. This:
 ```bash
 ailab new mybox
 
+# Install a package immediately after creation (onboards and drops to shell)
+ailab new mybox --install openclaw
+
+# Multiple packages
+ailab new mybox --install openclaw --install nullclaw
+
 # With extra port forwarding
-ailab new mybox --port 5000:5000
+ailab new mybox --port 5000:5000 --install openclaw
 ```
 
 ### `ailab run <name>`
@@ -220,11 +225,8 @@ Additional ports are forwarded when specific packages are installed:
 **Multiple sandboxes**: Create separate containers for different projects or
 different AI tools:
 ```bash
-ailab new coding
-ailab install coding openclaw
-
-ailab new experiments
-ailab install experiments nullclaw
+ailab new coding --install openclaw
+ailab new experiments --install nullclaw
 ```
 
 **Persistence**: Containers persist between reboots. LXD starts them
