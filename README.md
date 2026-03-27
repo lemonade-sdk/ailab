@@ -110,6 +110,14 @@ Start the container (if stopped) and open an interactive shell.
 ailab run mybox
 ```
 
+### `ailab stop <name>`
+
+Stop a running container.
+
+```bash
+ailab stop mybox
+```
+
 ### `ailab list`
 
 List all ailab containers with their status and forwarded ports.

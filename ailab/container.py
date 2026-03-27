@@ -458,6 +458,24 @@ def run_container(name: str, post_cmds: list[str] | None = None):
     ])
 
 
+def stop_container(name: str):
+    """Stop a running container."""
+    cname = _container_name(name)
+    status = _container_status(cname)
+
+    if status == "missing":
+        print(f"Container '{name}' not found.")
+        sys.exit(1)
+
+    if status != "running":
+        print(f"Container '{name}' is not running (status: {status}).")
+        return
+
+    print(f"Stopping container '{name}'...")
+    _lxc("stop", cname)
+    print(f"Container '{name}' stopped.")
+
+
 # ── List ──────────────────────────────────────────────────────────────────────
 
 def list_containers():

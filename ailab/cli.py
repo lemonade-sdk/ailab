@@ -12,6 +12,7 @@ from .container import (
     list_ports,
     remove_port,
     run_container,
+    stop_container,
 )
 from .installers import INSTALLERS, get_installer
 
@@ -63,6 +64,10 @@ def cmd_run(args):
 
 def cmd_list(args):
     list_containers()
+
+
+def cmd_stop(args):
+    stop_container(args.name)
 
 
 def cmd_delete(args):
@@ -128,6 +133,7 @@ examples:
   ailab new mybox              Create a new sandbox named 'mybox'
   ailab install mybox openclaw Install openclaw (local-AI configured)
   ailab run mybox              Open a shell in 'mybox'
+  ailab stop mybox             Stop a running sandbox
   ailab list                   List all sandboxes
   ailab delete mybox           Delete a sandbox
   ailab packages               List installable packages
@@ -177,6 +183,11 @@ examples:
     p_run = sub.add_parser("run", help="Open a shell inside a sandbox")
     p_run.add_argument("name", help="Sandbox name")
     p_run.set_defaults(func=cmd_run)
+
+    # ── stop ───────────────────────────────────────────────────────────────────
+    p_stop = sub.add_parser("stop", help="Stop a running sandbox")
+    p_stop.add_argument("name", help="Sandbox name")
+    p_stop.set_defaults(func=cmd_stop)
 
     # ── list ───────────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List all sandboxes", aliases=["ls"])

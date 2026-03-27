@@ -20,6 +20,9 @@ automatically, then an interactive shell is opened.
 .B run \fINAME\fR
 Start the container (if stopped) and open an interactive login shell.
 .TP
+.B stop \fINAME\fR
+Stop a running container.
+.TP
 .B list
 List all ailab containers with status, IP address, and forwarded ports.
 Alias: \fBls\fR
@@ -31,8 +34,7 @@ Alias: \fBrm\fR
 .TP
 .B install \fINAME PACKAGE\fR
 Install a pre-configured AI tool into an existing container. Tools are
-configured for local-first AI (lemonade primary, ollama fallback, cloud
-providers disabled).
+configured for local-first AI with cloud providers disabled.
 .TP
 .B packages
 List available installable packages.
@@ -57,6 +59,9 @@ List all sandboxes:
 .TP
 Open a shell in an existing sandbox:
 .B ailab run mybox
+.TP
+Stop a running sandbox:
+.B ailab stop mybox
 .TP
 Install nullclaw into an existing sandbox:
 .B ailab install mybox nullclaw
