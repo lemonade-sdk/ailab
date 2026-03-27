@@ -35,8 +35,6 @@ sudo add-apt-repository ppa:ken-vandine/ailab
 sudo apt install ailab
 ```
 
-Then reboot!
-
 Or install from source:
 
 Install LXD:
