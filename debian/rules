@@ -3,4 +3,4 @@
 export PYBUILD_NAME=ailab
 
 %:
-	dh $@ --buildsystem=pybuild
+	dh $@ --buildsystem=pybuild --with python3

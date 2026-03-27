@@ -1,0 +1,75 @@
+.TH AILAB 1 "2026" "ailab" "User Commands"
+.SH NAME
+ailab \- manage LXD-based sandboxes for running AI tools safely on Ubuntu
+.SH SYNOPSIS
+.B ailab
+\fICOMMAND\fR [\fIOPTIONS\fR] [\fIARGS\fR]
+.SH DESCRIPTION
+.B ailab
+creates lightweight LXD containers pre-wired to use AI services running
+on the host (lemonade-server, ollama). Each container shares the user's
+home directory while keeping installed software isolated. All containers
+live in a dedicated LXD project named \fBailab\fR.
+.SH COMMANDS
+.TP
+.B new \fINAME\fR [\-\-install \fIPACKAGE\fR] [\-\-port \fIHOST:CONTAINER\fR]
+Create a new sandbox container. Optionally install one or more packages
+immediately after creation; packages with an onboard step run it
+automatically, then an interactive shell is opened.
+.TP
+.B run \fINAME\fR
+Start the container (if stopped) and open an interactive login shell.
+.TP
+.B list
+List all ailab containers with status, IP address, and forwarded ports.
+Alias: \fBls\fR
+.TP
+.B delete \fINAME\fR [\-\-force]
+Stop and permanently delete a container. Prompts for confirmation unless
+\fB\-\-force\fR is given.
+Alias: \fBrm\fR
+.TP
+.B install \fINAME PACKAGE\fR
+Install a pre-configured AI tool into an existing container. Tools are
+configured for local-first AI (lemonade primary, ollama fallback, cloud
+providers disabled).
+.TP
+.B packages
+List available installable packages.
+Alias: \fBpkgs\fR
+.TP
+.B port add \fINAME PORT\fR [\fICONTAINER_PORT\fR] [\-\-inbound]
+Add a port proxy to a container. Default: outbound (host browser to
+container service). With \fB\-\-inbound\fR: container localhost to host service.
+.TP
+.B port remove \fINAME PORT\fR
+Remove a custom port proxy.
+.TP
+.B port list \fINAME\fR
+List all port proxies on a container.
+.SH EXAMPLES
+.TP
+Create a sandbox with openclaw, run onboarding, drop to shell:
+.B ailab new mybox \-\-install openclaw
+.TP
+List all sandboxes:
+.B ailab list
+.TP
+Open a shell in an existing sandbox:
+.B ailab run mybox
+.TP
+Install nullclaw into an existing sandbox:
+.B ailab install mybox nullclaw
+.TP
+Expose a port from the container to the host:
+.B ailab port add mybox 9000
+.SH FILES
+.TP
+.I ~/.local/share/ailab/containers/NAME/
+Per-container configuration directory. Accessible inside the container
+at the same path via the bind-mounted home directory.
+.SH SEE ALSO
+.BR lxc (1)
+.SH AUTHOR
+Ken VanDine and contributors.
+Homepage: https://github.com/kenvandine/ailab

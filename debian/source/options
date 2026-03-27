@@ -1,0 +1,5 @@
+tar-ignore = .venv
+tar-ignore = .git
+tar-ignore = *.egg-info
+tar-ignore = __pycache__
+tar-ignore = *.pyc
