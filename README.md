@@ -169,17 +169,17 @@ ailab port remove mybox 9000
 
 ## Installable Packages
 
-| Package | Description |
-|---------|-------------|
-| `openclaw` | AI coding agent with local-first LLM support. Web UI at `http://localhost:18789`. |
-| `nullclaw` | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://localhost:3000`. |
-| `picoclaw` | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://localhost:18800`. |
+| Package | Status | Description |
+|---------|--------|-------------|
+| `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://localhost:18789`. |
+| `nullclaw` | Planned | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://localhost:3000`. |
+| `picoclaw` | Planned | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://localhost:18800`. |
 
-All packages are configured to prefer local model providers and disable cloud
-providers by default. `openclaw` uses a single `lemonade` provider on
-`localhost:8000` via the Ollama API. `nullclaw` and `picoclaw` are configured
-to use lemonade-server as the primary provider, with ollama available as a
-fallback on `localhost:11434`.
+Only `openclaw` is fully supported at this time. `nullclaw` and `picoclaw`
+support is planned for a future release.
+
+`openclaw` is configured to use lemonade-server as the primary provider on
+`localhost:8000` via the Ollama API, with cloud providers disabled.
 
 ## How It Works
 
