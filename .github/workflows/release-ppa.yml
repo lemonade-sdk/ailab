@@ -1,0 +1,57 @@
+name: Release to PPA
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  upload-ppa:
+    name: Upload ${{ matrix.distro }} to PPA
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [noble, questing, resolute]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            devscripts \
+            debhelper \
+            dh-python \
+            dput \
+            pybuild-plugin-pyproject \
+            python3-all \
+            python3-setuptools
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Parse version from tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
+
+      - name: Stamp changelog for ${{ matrix.distro }}
+        env:
+          DEBEMAIL: ken@vandine.org
+          DEBFULLNAME: Ken VanDine
+        run: |
+          dch \
+            --newversion "${VERSION}-1~${{ matrix.distro }}1" \
+            --distribution "${{ matrix.distro }}" \
+            --force-distribution \
+            "Release ${VERSION} for ${{ matrix.distro }}"
+
+      - name: Build signed source package
+        run: debuild -S -sa -k"${{ secrets.GPG_KEY_ID }}"
+
+      - name: Upload to ppa:ken-vandine/ailab
+        run: dput ppa:ken-vandine/ailab ../*.changes

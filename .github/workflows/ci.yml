@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # ── Python lint ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install --quiet ruff
+      - run: ruff check ailab/
+
+  # ── Smoke test — import and CLI ─────────────────────────────────────────────
+  test:
+    name: Smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install --quiet -e .
+
+      - name: Check imports
+        run: |
+          python -c "
+          import ailab
+          from ailab import cli, container
+          from ailab.installers import INSTALLERS
+          print('imports OK')
+          print('installers:', list(INSTALLERS))
+          "
+
+      - name: Check CLI help
+        run: |
+          ailab --help
+          ailab new --help
+          ailab install --help
+
+  # ── Build source package and run lintian ────────────────────────────────────
+  lintian:
+    name: Lintian
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            devscripts \
+            debhelper \
+            dh-python \
+            lintian \
+            pybuild-plugin-pyproject \
+            python3-all \
+            python3-setuptools
+
+      - name: Build source package (unsigned)
+        run: debuild -us -uc -S
+
+      - name: Run lintian
+        run: lintian --fail-on error ../*.changes
