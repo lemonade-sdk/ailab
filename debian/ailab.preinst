@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+COMPLETION_PATH="/usr/share/bash-completion/completions/ailab"
+
+case "$1" in
+    install|upgrade)
+        if [ -d "$COMPLETION_PATH" ] && [ -f "$COMPLETION_PATH/ailab-completion.bash" ]; then
+            rm -rf "$COMPLETION_PATH"
+        fi
+        ;;
+esac
