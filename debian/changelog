@@ -1,0 +1,5 @@
+ailab (0.0.1-1) UNRELEASED; urgency=medium
+
+  * Initial Debian package.
+
+ -- Ken VanDine <ken.vandineorg>  Thu, 26 Mar 2026 23:29:25 -0400

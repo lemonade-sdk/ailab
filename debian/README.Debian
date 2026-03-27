@@ -1,0 +1,12 @@
+ailab is packaged as a Python application using Debian's pybuild workflow.
+
+The package depends on snapd and installs the lxd snap from its post-install
+script because Debian package dependencies cannot target an individual snap.
+
+After installing the package, initialize LXD if needed:
+
+  sudo lxd init --auto
+
+Then add your user to the lxd group and re-login:
+
+  sudo usermod -aG lxd $USER

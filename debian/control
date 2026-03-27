@@ -1,0 +1,28 @@
+Source: ailab
+Section: utils
+Priority: optional
+Maintainer: Ken VanDine <ken@vandine.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-setuptools
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/kenvandine/ailab
+
+Package: ailab
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ snapd
+Description: LXD-based sandboxes for running AI tools safely on Ubuntu
+ ailab creates LXD sandboxes that are pre-wired to use AI services running on
+ the host while keeping installed software isolated from the rest of the
+ system. Each container shares the user's home directory so files remain
+ directly accessible on the host.
+ .
+ This package depends on snapd and installs the lxd snap during package
+ configuration if it is not already present.
