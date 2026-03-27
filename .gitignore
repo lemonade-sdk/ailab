@@ -4,3 +4,11 @@ __pycache__/
 .venv/
 dist/
 build/
+.pybuild/
+debian/.debhelper/
+debian/ailab/
+debian/ailab.postinst.debhelper
+debian/ailab.prerm.debhelper
+debian/ailab.substvars
+debian/debhelper-build-stamp
+debian/files
