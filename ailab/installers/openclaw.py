@@ -124,7 +124,11 @@ openclaw() {{
              input=snippet)
 
     def _install_shell_completion(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
-        """Install openclaw bash completion for the container user."""
+        """Install openclaw bash completion system-wide in the container.
+
+        Writes to /etc/bash_completion.d/openclaw so it is sourced unconditionally
+        for all users — more reliable than the user-dir lazy-loading path.
+        """
         result = _lxc(
             "exec", cname,
             f"--user={uid}",
@@ -134,12 +138,20 @@ openclaw() {{
             f"--env=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json",
             "--",
             "bash", "-lc",
-            "openclaw completion --shell bash --install --yes",
+            "openclaw completion --shell bash",
             check=False,
             capture=True,
         )
-        if result.returncode != 0:
-            print("  Warning: openclaw shell completion install failed (non-fatal)")
+        if result.returncode != 0 or not result.stdout.strip():
+            print("  Warning: openclaw shell completion generation failed (non-fatal)")
+            return
+        _lxc(
+            "exec", cname,
+            "--",
+            "bash", "-c",
+            "cat > /etc/bash_completion.d/openclaw",
+            input=result.stdout,
+        )
 
     def _npm_install(self, cname: str, uid: int):
         """Install openclaw globally via npm inside the container (as root)."""
