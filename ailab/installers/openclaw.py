@@ -42,6 +42,10 @@ class OpenclawInstaller:
         # Per-container config dir (inside the bind-mounted home, so no extra mount)
         cfg_dir = container_config_dir(container_name, home) / "openclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure correct ownership in case of re-install (previous run may have
+        # written files as container root, which maps to a different host UID).
+        _lxc("exec", cname, "--",
+             "chown", "-R", f"{uid}:{gid}", str(cfg_dir))
 
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)

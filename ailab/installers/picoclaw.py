@@ -40,6 +40,8 @@ class PicoClawInstaller:
 
         cfg_dir = container_config_dir(container_name, home) / "picoclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
+        _lxc("exec", cname, "--",
+             "chown", "-R", f"{uid}:{gid}", str(cfg_dir))
 
         print("Installing picoclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)
