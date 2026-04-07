@@ -14,7 +14,6 @@ from ..container import (
     push_file,
     set_container_env,
     start_container,
-    OUTBOUND_PROXIES,
 )
 
 # picoclaw WebUI launcher port
@@ -161,8 +160,6 @@ fi
         container_exec(cname, ["bash", "-c", install_script])
 
     def _add_port_proxy(self, cname: str):
-        if any(port == PICOCLAW_WEBUI_PORT for _, port in OUTBOUND_PROXIES):
-            return
         if has_device(cname, PICOCLAW_PROXY_DEVICE):
             return
         add_proxy_device(

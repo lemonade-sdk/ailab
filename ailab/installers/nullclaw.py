@@ -13,10 +13,9 @@ from ..container import (
     push_file,
     set_container_env,
     start_container,
-    OUTBOUND_PROXIES,
 )
 
-# nullclaw gateway port — already in OUTBOUND_PROXIES as "web-3000"
+# nullclaw gateway port
 NULLCLAW_GATEWAY_PORT = 3000
 
 
@@ -46,9 +45,8 @@ class NullclawInstaller:
         print("Installing nullclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)
 
-        if not any(port == NULLCLAW_GATEWAY_PORT for _, port in OUTBOUND_PROXIES):
-            print(f"Adding nullclaw gateway port proxy ({NULLCLAW_GATEWAY_PORT})...")
-            self._add_port_proxy(cname)
+        print(f"Adding nullclaw gateway port proxy ({NULLCLAW_GATEWAY_PORT})...")
+        self._add_port_proxy(cname)
 
         print("Setting nullclaw config env vars...")
         set_container_env(cname, {"NULLCLAW_CONFIG_DIR": str(cfg_dir)},

@@ -14,10 +14,16 @@ from ..container import (
     push_file,
     set_container_env,
     start_container,
-    OUTBOUND_PROXIES,
 )
 
-# openclaw gateway port — web UI accessible from host browser
+# Ports openclaw needs forwarded to the host browser
+OPENCLAW_PORTS = [
+    ("proxy-out-openclaw",  18789),  # openclaw web UI
+    ("proxy-out-gradio",     7860),  # gradio
+    ("proxy-out-streamlit",  8501),  # streamlit
+    ("proxy-out-jupyter",    8888),  # jupyter
+    ("proxy-out-prometheus", 9090),  # prometheus / general
+]
 OPENCLAW_GATEWAY_PORT = 18789
 OPENCLAW_PROXY_DEVICE = "proxy-out-openclaw"
 
@@ -148,17 +154,15 @@ openclaw() {{
         )
 
     def _add_port_proxy(self, cname: str):
-        """Add outbound proxy for openclaw's gateway port if not already present."""
-        if any(port == OPENCLAW_GATEWAY_PORT for _, port in OUTBOUND_PROXIES):
-            return
-        if has_device(cname, OPENCLAW_PROXY_DEVICE):
-            return
-        add_proxy_device(
-            cname, OPENCLAW_PROXY_DEVICE,
-            f"tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
-            f"tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
-            bind="host",
-        )
+        """Add outbound proxies for all ports openclaw uses."""
+        for device_name, port in OPENCLAW_PORTS:
+            if not has_device(cname, device_name):
+                add_proxy_device(
+                    cname, device_name,
+                    f"tcp:127.0.0.1:{port}",
+                    f"tcp:127.0.0.1:{port}",
+                    bind="host",
+                )
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
         """Push and run the Node.js setup script inside the container."""

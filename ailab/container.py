@@ -24,16 +24,9 @@ INBOUND_PROXIES = [
     ("ollama",   11434),  # ollama
 ]
 
-# Ports proxied FROM the container to the host (host browser → container service)
-# Web UIs running in the container are accessible on the host at the same port.
-# Note: tool-specific ports (e.g. 3000 for nullclaw, 18789 for openclaw) are
-# added by the individual installers, not here.
-OUTBOUND_PROXIES = [
-    ("web-7860",  7860),   # gradio
-    ("web-8888",  8888),   # jupyter
-    ("web-8501",  8501),   # streamlit
-    ("web-9090",  9090),   # prometheus / generic
-]
+# Ports proxied FROM the container to the host (host browser → container service).
+# Kept empty — each installer adds only the ports its tool actually uses.
+OUTBOUND_PROXIES: list = []
 
 
 
