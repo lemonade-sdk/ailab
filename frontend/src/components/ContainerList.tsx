@@ -107,7 +107,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
   const [showPairModal, setShowPairModal] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const fetchUrl = () => {
     if (!TOKEN_AUTH_PORTS.has(port)) {
       setUrl(`http://localhost:${port}`);
       return;
@@ -123,7 +123,20 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
         }
       })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchUrl();
   }, [name, port]);
+
+  // While unpaired, poll every 5s so the button flips to "Open" automatically
+  // once an install or pair flow completes (without requiring a page refresh).
+  useEffect(() => {
+    if (!notPaired) return;
+    const interval = setInterval(fetchUrl, 5000);
+    return () => clearInterval(interval);
+  }, [notPaired, name, port]);
+
 
   if (loading) {
     return (
