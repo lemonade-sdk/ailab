@@ -44,10 +44,10 @@ Configure the host and port with snap settings:
 
 ```bash
 snap set ailab web.host=127.0.0.1   # default: 127.0.0.1
-snap set ailab web.port=8080         # default: 8080
+snap set ailab web.port=11500        # default: 11500
 ```
 
-Then open `http://localhost:8080` in your browser.
+Then open `http://localhost:11500` in your browser.
 
 ### From the PPA
 
@@ -186,13 +186,13 @@ creating, starting, stopping, and deleting containers. Includes:
 - Port proxy management (add/remove proxy devices)
 
 ```bash
-ailab web                    # binds to 127.0.0.1:8080
+ailab web                    # binds to 127.0.0.1:11500
 ailab web --host 0.0.0.0    # expose on the local network
 ailab web --port 9000        # use a different port
 ailab web --reload           # auto-reload on code changes (development)
 ```
 
-Then open `http://localhost:8080` in your browser.
+Then open `http://localhost:11500` in your browser.
 
 ### `ailab port`
 
@@ -286,7 +286,7 @@ Additional ports are forwarded when specific packages are installed:
 ## Tips
 
 **Web interface**: `ailab web` serves a React dashboard at
-`http://localhost:8080`. The frontend communicates with a FastAPI backend
+`http://localhost:11500`. The frontend communicates with a FastAPI backend
 over REST, SSE (for live creation/install progress), and WebSockets
 (interactive terminal and log tail).
 

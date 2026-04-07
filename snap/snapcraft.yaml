@@ -17,7 +17,7 @@ description: |
   Or start the web management interface:
 
     snap set ailab web.host=0.0.0.0
-    snap set ailab web.port=8080
+    snap set ailab web.port=11500
 
   The web service runs as a background daemon and is accessible at
   http://HOST:PORT once started.

@@ -12,7 +12,7 @@ if [ -z "$HOST" ]; then
 fi
 
 if [ -z "$PORT" ]; then
-    snapctl set web.port=8080
+    snapctl set web.port=11500
 else
     # Validate port is a number in the valid range
     if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
