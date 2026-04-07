@@ -167,7 +167,11 @@ class OpenclawInstaller:
         # Start gateway in background, run onboard, then let systemd take over — all in one shell
         # so the background gateway process is definitely alive when onboard runs.
         script = f"""
-set -e
+# Stop any already-running gateway (systemd or manual) before the temporary onboard instance
+systemctl --user stop openclaw-gateway 2>/dev/null || true
+openclaw gateway stop 2>/dev/null || true
+sleep 1
+
 # Start gateway with explicit token (avoid config-vs-env ambiguity)
 openclaw gateway run --port {OPENCLAW_GATEWAY_PORT} \
     --token {gateway_token} \
