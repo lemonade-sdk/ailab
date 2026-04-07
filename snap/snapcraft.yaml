@@ -1,0 +1,79 @@
+name: ailab
+base: core24
+version: git
+summary: LXD-based sandboxes for running AI tools safely on Ubuntu
+description: |
+  AI Lab creates lightweight LXD containers pre-wired to use AI services
+  running on your host (lemonade-server, ollama). Each container shares your
+  home directory, keeping installed software isolated from the rest of your
+  system.
+
+  Use the CLI to create and manage sandboxes:
+
+    ailab new mybox --install openclaw
+    ailab run mybox
+    ailab list
+
+  Or start the web management interface:
+
+    snap set ailab web.host=0.0.0.0
+    snap set ailab web.port=8080
+
+  The web service runs as a background daemon and is accessible at
+  http://HOST:PORT once started.
+
+grade: devel
+confinement: strict
+
+apps:
+  ailab:
+    command: bin/ailab
+    plugs:
+      - lxd
+      - home
+      - network
+
+  web:
+    command: bin/ailab-web-wrapper
+    daemon: simple
+    restart-condition: on-failure
+    plugs:
+      - lxd
+      - home
+      - network
+      - network-bind
+
+parts:
+  frontend:
+    plugin: nil
+    source: frontend
+    build-packages:
+      - nodejs
+      - npm
+    override-build: |
+      npm ci --include=dev
+      npx vite build --outDir dist
+      mkdir -p $SNAPCRAFT_PART_INSTALL/web-static
+      cp -r dist/. $SNAPCRAFT_PART_INSTALL/web-static/
+
+  ailab:
+    plugin: python
+    source: .
+    python-packages:
+      - pylxd>=2.4.0
+      - fastapi>=0.110.0
+      - uvicorn[standard]>=0.29.0
+    after:
+      - frontend
+    override-build: |
+      mkdir -p $SNAPCRAFT_PART_BUILD/ailab/web/static
+      cp -r $SNAPCRAFT_STAGE/web-static/. $SNAPCRAFT_PART_BUILD/ailab/web/static/
+      craftctl default
+    organize:
+      bin/ailab: bin/ailab
+
+  wrapper:
+    plugin: dump
+    source: snap/local
+    organize:
+      ailab-web-wrapper: bin/ailab-web-wrapper

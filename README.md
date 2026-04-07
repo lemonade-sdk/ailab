@@ -30,22 +30,39 @@ while keeping installed software isolated from the rest of your system.
 
 ## Installation
 
-Install from the PPA:
+### Snap (recommended)
+
+```bash
+sudo snap install lxd
+sudo lxd init --auto
+sudo snap install ailab
+sudo snap connect ailab:lxd lxd:lxd
+```
+
+The web management interface runs as a daemon automatically after install.
+Configure the host and port with snap settings:
+
+```bash
+snap set ailab web.host=127.0.0.1   # default: 127.0.0.1
+snap set ailab web.port=8080         # default: 8080
+```
+
+Then open `http://localhost:8080` in your browser.
+
+### From the PPA
 
 ```bash
 sudo add-apt-repository ppa:ken-vandine/ailab
 sudo apt install ailab
 ```
 
-Or install from source:
+### From source
 
 Install LXD:
 ```bash
 sudo snap install lxd
 sudo lxd init --auto
-sudo usermod -aG lxd $USER   # then reboot
 ```
-
 
 ```bash
 git clone https://github.com/kenvandine/ailab
