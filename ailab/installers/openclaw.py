@@ -1,6 +1,9 @@
 """Installer for openclaw inside an ailab container."""
 
 import importlib.resources
+import json
+import secrets
+from pathlib import Path
 
 from ..container import (
     _container_name,
@@ -56,8 +59,8 @@ class OpenclawInstaller:
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)
 
-        print("Installing openclaw gateway system service (as root)...")
-        self._install_gateway_service(cname)
+        print("Installing openclaw gateway user service...")
+        self._install_gateway_service(cname, uid, gid, home)
 
         print("Adding openclaw gateway port proxy (18789)...")
         self._add_port_proxy(cname)
@@ -74,33 +77,135 @@ class OpenclawInstaller:
         print("Configuring openclaw (probing lemonade via Ollama API)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)
 
+        print("Pairing openclaw gateway device (generating access token)...")
+        gateway_token = self._generate_gateway_token(uid)
+        self._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
+        self._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+
+        # Read back the per-device operator token for display
+        device_auth = cfg_dir / "identity" / "device-auth.json"
+        device_token = self._read_device_token(device_auth)
+
         print()
         print(f"openclaw installed in '{container_name}'.")
         print()
         print(f"  Config:       {cfg_dir}/openclaw.json")
         print(f"  Start:        ailab run {container_name}")
         print("  Launch:       openclaw")
-        print("  Web UI:       http://localhost:18789")
+        if device_token:
+            print(f"  Web UI:       http://localhost:18789/#token={device_token}")
+        else:
+            print("  Web UI:       http://localhost:18789")
         print()
         print("  Lemonade is pre-configured via localhost proxy (port 8000).")
         print("  Make sure lemonade-server is running on the host.")
 
-    def _install_gateway_service(self, cname: str):
-        """Install openclaw's gateway as a system service (requires root)."""
+    def _install_gateway_service(self, cname: str, uid: int, gid: int, home: str):
+        """Install openclaw's gateway as a user-level systemd service."""
         container_exec(
             cname,
             ["bash", "-c", "openclaw gateway install 2>&1 || true"],
-            env={"HOME": "/root"},
+            uid=uid, gid=gid,
+            env={"HOME": home},
             check=False,
         )
         container_exec(
             cname,
             ["bash", "-c",
-             "systemctl daemon-reload 2>/dev/null || true"
-             " && systemctl enable openclaw-gateway 2>/dev/null || true"
-             " && systemctl start openclaw-gateway 2>/dev/null || true"],
+             "systemctl --user daemon-reload 2>/dev/null || true"
+             " && systemctl --user enable openclaw-gateway 2>/dev/null || true"],
+            uid=uid, gid=gid,
+            env={
+                "HOME": home,
+                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            },
             check=False,
         )
+
+    def _generate_gateway_token(self, uid: int) -> str:
+        """Generate a random gateway shared token for the openclaw gateway."""
+        return secrets.token_urlsafe(32)
+
+    def _configure_gateway_env(
+        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+    ):
+        """Write gateway env vars to systemd user environment.d so the service picks them up."""
+        env_dir = Path(home) / ".config" / "environment.d"
+        conf = (
+            f"OPENCLAW_STATE_DIR={cfg_dir}\n"
+            f"OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json\n"
+            f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+        )
+        container_exec(
+            cname,
+            ["bash", "-c", f"mkdir -p {env_dir} && cat > {env_dir}/ailab-openclaw.conf"],
+            uid=uid, gid=gid,
+            env={"HOME": home},
+            stdin=conf.encode(),
+        )
+        # Also add OPENCLAW_GATEWAY_TOKEN to the login profile for CLI use
+        snippet = f"\nexport OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+        container_exec(
+            cname,
+            ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
+            stdin=snippet.encode(),
+        )
+
+    def _run_onboard(
+        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+    ):
+        """Start the gateway, pair the CLI device, then let systemd manage the service."""
+        env = {
+            "HOME": home,
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            "OPENCLAW_STATE_DIR": str(cfg_dir),
+            "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+        }
+
+        # Start gateway in background, run onboard, then let systemd take over — all in one shell
+        # so the background gateway process is definitely alive when onboard runs.
+        script = f"""
+set -e
+# Start gateway with explicit token (avoid config-vs-env ambiguity)
+openclaw gateway run --port {OPENCLAW_GATEWAY_PORT} \
+    --token {gateway_token} \
+    --allow-unconfigured > /tmp/ailab-gw-onboard.log 2>&1 &
+GWAY_PID=$!
+sleep 5
+
+# Pair the CLI device
+openclaw onboard \
+    --non-interactive --accept-risk \
+    --mode local --auth-choice skip \
+    --gateway-auth token --gateway-token {gateway_token} \
+    --gateway-bind loopback --gateway-port {OPENCLAW_GATEWAY_PORT} \
+    --skip-daemon --skip-channels --skip-search --skip-skills --skip-ui 2>&1 || true
+
+# Stop the temporary gateway
+kill $GWAY_PID 2>/dev/null || true
+sleep 1
+
+# Start the persistent systemd-managed service
+systemctl --user daemon-reload 2>/dev/null || true
+systemctl --user start openclaw-gateway 2>/dev/null || true
+"""
+        container_exec(
+            cname,
+            ["bash", "-c", script],
+            uid=uid, gid=gid,
+            env=env,
+            check=False,
+        )
+
+    def _read_device_token(self, device_auth_path: Path) -> str | None:
+        """Read the operator token from device-auth.json if it exists."""
+        try:
+            data = json.loads(device_auth_path.read_text())
+            return data.get("tokens", {}).get("operator", {}).get("token")
+        except Exception:
+            return None
 
     def _write_onboard_wrapper(self, cname: str, cfg_dir):
         """Append a shell function that skips provider re-selection when a config exists."""

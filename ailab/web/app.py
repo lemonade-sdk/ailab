@@ -341,6 +341,32 @@ async def api_remove_port(name: str, device_name: str):
     return {"status": "removed", "device": device_name}
 
 
+# ── Gateway URL endpoint ──────────────────────────────────────────────────────
+
+OPENCLAW_GATEWAY_PORT = 18789
+
+
+@app.get("/api/containers/{name}/gateway-url")
+async def api_gateway_url(name: str):
+    """Return the openclaw dashboard URL with device token, if the container has openclaw."""
+    _, _, _, home = _current_user()
+    cfg_dir = container_config_dir(name, home) / "openclaw"
+    device_auth = cfg_dir / "identity" / "device-auth.json"
+    if not device_auth.exists():
+        raise HTTPException(status_code=404, detail="openclaw device token not found")
+    try:
+        import json as _json
+        data = _json.loads(device_auth.read_text())
+        token = data.get("tokens", {}).get("operator", {}).get("token")
+        if not token:
+            raise HTTPException(status_code=404, detail="openclaw operator token not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
+
+
 # ── Packages endpoint ─────────────────────────────────────────────────────────
 
 

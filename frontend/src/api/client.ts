@@ -52,6 +52,10 @@ export async function removePort(name: string, device: string): Promise<void> {
   await request(`/containers/${name}/ports/${device}`, { method: 'DELETE' });
 }
 
+export async function getGatewayUrl(name: string): Promise<{ url: string }> {
+  return request<{ url: string }>(`/containers/${name}/gateway-url`);
+}
+
 export async function getPackages(): Promise<Package[]> {
   return request<Package[]>('/packages');
 }

@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { Container } from '../types';
-import { startContainer, stopContainer, deleteContainer } from '../api/client';
+import { startContainer, stopContainer, deleteContainer, getGatewayUrl } from '../api/client';
 
 interface Props {
   containers: Container[];
@@ -17,6 +18,9 @@ const GATEWAY_PORTS: Record<number, string> = {
   18800: 'picoclaw',
 };
 
+// Ports that use token-based auth — URL fetched from API rather than constructed client-side.
+const TOKEN_AUTH_PORTS = new Set([18789]);
+
 function StatusBadge({ status }: { status: string }) {
   const isRunning = status.toLowerCase() === 'running';
   return (
@@ -30,6 +34,46 @@ function StatusBadge({ status }: { status: string }) {
       <span className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-green-400' : 'bg-slate-500'}`} />
       {status}
     </span>
+  );
+}
+
+function GatewayButton({ name, port, label }: { name: string; port: number; label: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!TOKEN_AUTH_PORTS.has(port)) {
+      setUrl(`http://localhost:${port}`);
+      return;
+    }
+    setLoading(true);
+    getGatewayUrl(name)
+      .then(({ url }) => setUrl(url))
+      .catch(() => setUrl(`http://localhost:${port}`))
+      .finally(() => setLoading(false));
+  }, [name, port]);
+
+  if (loading || !url) {
+    return (
+      <span className="inline-flex items-center gap-1.5 bg-indigo-900/50 text-indigo-400 text-xs font-medium px-3 py-1.5 rounded">
+        {loading ? '…' : `Open ${label}`}
+      </span>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+    >
+      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+      </svg>
+      Open {label}
+    </a>
   );
 }
 
@@ -86,19 +130,7 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
             {running && gateways.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {gateways.map(({ port, label }) => (
-                  <a
-                    key={port}
-                    href={`http://localhost:${port}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                        d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                    </svg>
-                    Open {label}
-                  </a>
+                  <GatewayButton key={port} name={c.name} port={port} label={label} />
                 ))}
               </div>
             )}
