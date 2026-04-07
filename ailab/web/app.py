@@ -36,6 +36,7 @@ from ailab.container import (
     container_exec,
     create_container,
     delete_container,
+    get_container_user,
     has_device,
     list_ports,
     list_system_users,
@@ -88,20 +89,9 @@ class AddPortRequest(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _get_container_user(cname: str) -> tuple[str, int, int, str]:
-    """Return (username, uid, gid, home) for the user mapped into a container.
-
-    Reads the 'user.ailab-mapped-user' config key stored in LXD at creation
-    time.  Falls back to the current process user for backward compatibility.
-    """
-    try:
-        instance = _client().instances.get(cname)
-        mapped = instance.config.get("user.ailab-mapped-user")
-        if mapped:
-            return _user_info(mapped)
-    except Exception:
-        pass
-    return _current_user()
+# _get_container_user is imported from ailab.container as get_container_user;
+# alias it for local use throughout this module.
+_get_container_user = get_container_user
 
 
 def _get_ipv4(client, cname: str) -> str:

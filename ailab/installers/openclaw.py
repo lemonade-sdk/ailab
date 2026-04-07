@@ -13,6 +13,7 @@ from ..container import (
     add_proxy_device,
     container_config_dir,
     container_exec,
+    get_container_user,
     has_device,
     push_file,
     set_container_env,
@@ -39,7 +40,7 @@ class OpenclawInstaller:
     def install(self, container_name: str):
         """Install and configure openclaw in the named container."""
         cname = _container_name(container_name)
-        username, uid, gid, home = _current_user()
+        username, uid, gid, home = get_container_user(cname)
 
         if _container_status(cname) == "missing":
             raise RuntimeError(

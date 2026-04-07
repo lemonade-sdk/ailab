@@ -75,6 +75,23 @@ def list_system_users() -> list[dict]:
     return sorted(users, key=lambda u: u["uid"])
 
 
+def get_container_user(cname: str) -> tuple[str, int, int, str]:
+    """Return (username, uid, gid, home) for the user mapped into a container.
+
+    Reads 'user.ailab-mapped-user' from the LXD instance config, which is
+    stored at creation time.  Falls back to the current process user for
+    backward compatibility with containers created before this feature.
+    """
+    try:
+        instance = _client().instances.get(cname)
+        mapped = instance.config.get("user.ailab-mapped-user")
+        if mapped:
+            return _user_info(mapped)
+    except Exception:
+        pass
+    return _current_user()
+
+
 # ── Instance helpers ──────────────────────────────────────────────────────────
 
 def _get_instance(cname: str):
