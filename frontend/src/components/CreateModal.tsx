@@ -10,7 +10,7 @@ interface Props {
 export function CreateModal({ onClose, onDone }: Props) {
   const [name, setName] = useState('');
   const [packages, setPackages] = useState<Package[]>([]);
-  const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
+  const [selectedPackage, setSelectedPackage] = useState<string>('openclaw');
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
   const [log, setLog] = useState('');
   const [running, setRunning] = useState(false);
@@ -19,7 +19,13 @@ export function CreateModal({ onClose, onDone }: Props) {
   const logRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    getPackages().then(setPackages).catch(console.error);
+    getPackages().then((pkgs) => {
+      setPackages(pkgs);
+      // Keep 'openclaw' default if it exists, otherwise pick the first package
+      if (!pkgs.find((p) => p.name === 'openclaw') && pkgs.length > 0) {
+        setSelectedPackage(pkgs[0].name);
+      }
+    }).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -27,12 +33,6 @@ export function CreateModal({ onClose, onDone }: Props) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [log]);
-
-  const togglePackage = (name: string) => {
-    setSelectedPackages((prev) =>
-      prev.includes(name) ? prev.filter((p) => p !== name) : [...prev, name],
-    );
-  };
 
   const addPortRow = () => setExtraPorts((prev) => [...prev, { host: '', container: '' }]);
   const removePortRow = (i: number) => setExtraPorts((prev) => prev.filter((_, idx) => idx !== i));
@@ -46,12 +46,13 @@ export function CreateModal({ onClose, onDone }: Props) {
     setRunning(true);
     setLog('');
 
+    const pkgs = selectedPackage ? [selectedPackage] : [];
     const ports = extraPorts
       .filter((p) => p.host && p.container)
       .map((p) => ({ host_port: parseInt(p.host), container_port: parseInt(p.container) }));
 
     try {
-      await createContainerStream(name.trim(), selectedPackages, ports, (event: SSEEvent) => {
+      await createContainerStream(name.trim(), pkgs, ports, (event: SSEEvent) => {
         if (event.type === 'log') setLog((prev) => prev + event.msg + '\n');
         else if (event.type === 'done') setDone(true);
         else if (event.type === 'error') { setError(event.msg); setDone(true); }
@@ -83,28 +84,22 @@ export function CreateModal({ onClose, onDone }: Props) {
             />
           </div>
 
-          {packages.length > 0 && (
-            <div>
-              <label className="block text-sm text-slate-300 mb-2">Packages</label>
-              <div className="space-y-2">
-                {packages.map((pkg) => (
-                  <label key={pkg.name} className="flex items-start gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={selectedPackages.includes(pkg.name)}
-                      onChange={() => togglePackage(pkg.name)}
-                      disabled={running}
-                      className="mt-0.5 accent-indigo-500"
-                    />
-                    <span>
-                      <span className="text-sm text-slate-200 font-medium">{pkg.name}</span>
-                      <span className="text-xs text-slate-400 ml-2">{pkg.description}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
+          <div>
+            <label className="block text-sm text-slate-300 mb-1">Install package</label>
+            <select
+              value={selectedPackage}
+              onChange={(e) => setSelectedPackage(e.target.value)}
+              disabled={running}
+              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+            >
+              <option value="">— none (bare container) —</option>
+              {packages.map((pkg) => (
+                <option key={pkg.name} value={pkg.name}>
+                  {pkg.name} — {pkg.description}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div>
             <div className="flex items-center justify-between mb-2">
