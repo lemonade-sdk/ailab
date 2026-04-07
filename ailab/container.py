@@ -527,6 +527,10 @@ def _cloud_init_userdata(username: str, uid: int, gid: int, home: str) -> str:
         "\n"
         "locale: en_US.UTF-8\n"
         "\n"
+        # Disable ssh_authkey_fingerprints: it fails in LXD containers because
+        # SSH host keys aren't generated yet when the module runs.
+        "no_ssh_fingerprints: true\n"
+        "\n"
         "package_update: true\n"
         "package_upgrade: false\n"
         "\n"
@@ -743,6 +747,16 @@ def create_container(
     rc, out, _ = container_exec(cname, ["cloud-init", "status"], check=False)
     if rc != 0 or "error" in out.lower():
         print(f"Warning: cloud-init may have encountered errors: {out.strip()}")
+        # Dump the last 60 lines of the output log for diagnosis
+        _, log_out, _ = container_exec(
+            cname,
+            ["tail", "-n", "60", "/var/log/cloud-init-output.log"],
+            check=False,
+        )
+        if log_out.strip():
+            print("--- cloud-init-output.log (last 60 lines) ---")
+            print(log_out)
+            print("---")
 
     # Write the AILAB_CONFIG_DIR profile.d snippet (config env is already set above)
     _get_instance(cname).files.put(
