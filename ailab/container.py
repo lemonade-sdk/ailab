@@ -560,7 +560,7 @@ def list_containers():
         cname = c["name"]
         status = c.get("status", "unknown")
         ipv4 = ""
-        for net in c.get("state", {}).get("network", {}).values():
+        for net in (c.get("state", {}).get("network") or {}).values():
             for addr in net.get("addresses", []):
                 if addr["family"] == "inet" and not addr["address"].startswith("127."):
                     ipv4 = addr["address"]
