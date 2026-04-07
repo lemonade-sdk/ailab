@@ -4,6 +4,7 @@ import asyncio
 import fcntl
 import io
 import json
+import logging
 import os
 import pty
 import struct
@@ -37,6 +38,7 @@ from ailab.container import (
     container_exec,
     create_container,
     delete_container,
+    find_lxc,
     get_container_user,
     has_device,
     list_ports,
@@ -54,6 +56,8 @@ from ailab.installers.openclaw import (
 )
 
 # ── App setup ─────────────────────────────────────────────────────────────────
+
+logger = logging.getLogger("ailab.web")
 
 app = FastAPI(title="ailab web interface")
 
@@ -457,64 +461,80 @@ async def api_list_users():
 @app.websocket("/api/ws/shell/{name}")
 async def shell_ws(ws: WebSocket, name: str):
     await ws.accept()
-    cname = _container_name(name)
-    username, uid, gid, home = _get_container_user(cname)
-    cmd = [
-        "lxc", "--project", AILAB_PROJECT, "exec", cname,
-        f"--user={uid}", f"--group={gid}",
-        f"--env=HOME={home}", f"--env=USER={username}",
-        f"--env=LOGNAME={username}",
-        f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
-        f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
-        "--env=TERM=xterm-256color",
-        f"--env=SHELL_WELCOME={build_shell_welcome(name)}",
-        f"--cwd={home}", "--", "/bin/bash", "--login",
-    ]
-
-    master_fd, slave_fd = pty.openpty()
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-        close_fds=True,
-    )
-    os.close(slave_fd)
-    loop = asyncio.get_event_loop()
-
-    async def pty_reader():
-        while True:
-            try:
-                data = await loop.run_in_executor(None, lambda: os.read(master_fd, 4096))
-                await ws.send_bytes(data)
-            except (OSError, WebSocketDisconnect):
-                break
-
-    async def ws_reader():
-        while True:
-            try:
-                msg = await ws.receive()
-                if "bytes" in msg:
-                    os.write(master_fd, msg["bytes"])
-                elif "text" in msg:
-                    data = json.loads(msg["text"])
-                    if data.get("type") == "resize":
-                        cols, rows = int(data["cols"]), int(data["rows"])
-                        fcntl.ioctl(
-                            master_fd, termios.TIOCSWINSZ,
-                            struct.pack("HHHH", rows, cols, 0, 0),
-                        )
-            except (WebSocketDisconnect, Exception):
-                break
-
+    master_fd = None
+    proc = None
     try:
+        cname = _container_name(name)
+        username, uid, gid, home = _get_container_user(cname)
+        try:
+            welcome = build_shell_welcome(name)
+        except Exception as exc:
+            logger.warning("build_shell_welcome failed for %s: %s", name, exc)
+            welcome = "Welcome to your AI Lab container!"
+        cmd = [
+            find_lxc(), "--project", AILAB_PROJECT, "exec", cname,
+            f"--user={uid}", f"--group={gid}",
+            f"--env=HOME={home}", f"--env=USER={username}",
+            f"--env=LOGNAME={username}",
+            f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
+            f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            "--env=TERM=xterm-256color",
+            f"--env=SHELL_WELCOME={welcome}",
+            f"--cwd={home}", "--", "/bin/bash", "--login",
+        ]
+
+        master_fd, slave_fd = pty.openpty()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        loop = asyncio.get_event_loop()
+
+        async def pty_reader():
+            while True:
+                try:
+                    data = await loop.run_in_executor(None, lambda: os.read(master_fd, 4096))
+                    await ws.send_bytes(data)
+                except (OSError, WebSocketDisconnect):
+                    break
+
+        async def ws_reader():
+            while True:
+                try:
+                    msg = await ws.receive()
+                    if "bytes" in msg:
+                        os.write(master_fd, msg["bytes"])
+                    elif "text" in msg:
+                        data = json.loads(msg["text"])
+                        if data.get("type") == "resize":
+                            cols, rows = int(data["cols"]), int(data["rows"])
+                            fcntl.ioctl(
+                                master_fd, termios.TIOCSWINSZ,
+                                struct.pack("HHHH", rows, cols, 0, 0),
+                            )
+                except (WebSocketDisconnect, Exception):
+                    break
+
         await asyncio.gather(pty_reader(), ws_reader(), return_exceptions=True)
-    finally:
+
+    except Exception as exc:
+        logger.error("shell_ws error for container %s: %s", name, exc, exc_info=True)
         try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        try:
-            proc.terminate()
+            await ws.send_text(f"\r\n[shell error: {exc}]\r\n")
         except Exception:
             pass
+    finally:
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
 
 # ── WebSocket: log tail ───────────────────────────────────────────────────────

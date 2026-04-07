@@ -2,6 +2,7 @@
 
 import os
 import pwd
+import shutil
 import socket
 import sys
 import textwrap
@@ -40,6 +41,22 @@ def _client() -> pylxd.Client:
 def _admin_client() -> pylxd.Client:
     """Return a pylxd Client for admin operations (project/profile management)."""
     return pylxd.Client()
+
+
+def find_lxc() -> str:
+    """Return the absolute path to the lxc binary.
+
+    Checks known snap and system locations before falling back to PATH.
+    This is important when running inside a snap daemon whose PATH may not
+    include /snap/bin.
+    """
+    for candidate in ("/snap/bin/lxc", "/usr/bin/lxc", "/usr/local/bin/lxc"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which("lxc")
+    if found:
+        return found
+    return "lxc"  # last resort – let execvp/subprocess fail with a clear error
 
 
 # ── User helpers ──────────────────────────────────────────────────────────────
@@ -872,8 +889,9 @@ def run_container(name: str, post_cmds: list[str] | None = None):
 
     # Use lxc exec for the interactive shell — it's the only operation that
     # needs a real PTY, which the REST API exec doesn't provide cleanly.
+    lxc = find_lxc()
     exec_args = [
-        "lxc", "--project", AILAB_PROJECT,
+        lxc, "--project", AILAB_PROJECT,
         "exec", cname,
         f"--user={uid}",
         f"--group={gid}",
