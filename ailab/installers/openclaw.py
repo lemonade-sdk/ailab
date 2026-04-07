@@ -2,6 +2,7 @@
 
 import importlib.resources
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -55,7 +56,8 @@ class OpenclawInstaller:
         # Per-container config dir (inside the bind-mounted home, so no extra mount)
         cfg_dir = container_config_dir(container_name, home) / "openclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        container_exec(cname, ["chown", "-R", f"{uid}:{gid}", str(cfg_dir)])
+        # Ensure ownership is correct on the host (important when server runs as root)
+        os.chown(cfg_dir, uid, gid)
 
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)
