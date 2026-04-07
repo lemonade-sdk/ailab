@@ -13,7 +13,8 @@ import pylxd.exceptions
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 AILAB_PROJECT = "ailab"
-BASE_IMAGE = "ubuntu-daily:devel"
+BASE_IMAGE_SERVER = "https://cloud-images.ubuntu.com/daily/"
+BASE_IMAGE_ALIAS = "devel"
 
 # Ports proxied INTO the container (container localhost → host service)
 # Apps in the container connect to these as if they're local, but they reach the host.
@@ -503,7 +504,12 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     idmap = f"uid {uid} {uid}\ngid {gid} {gid}"
     config = {
         "name": cname,
-        "source": {"type": "image", "alias": BASE_IMAGE},
+        "source": {
+            "type": "image",
+            "protocol": "simplestreams",
+            "server": BASE_IMAGE_SERVER,
+            "alias": BASE_IMAGE_ALIAS,
+        },
         "profiles": [AILAB_PROJECT],
         "config": {
             "raw.idmap": idmap,
@@ -515,7 +521,7 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
     }
 
     # ── Create and start ──────────────────────────────────────────────────────
-    print(f"Creating container '{cname}' from {BASE_IMAGE}...")
+    print(f"Creating container '{cname}' from {BASE_IMAGE_ALIAS} ({BASE_IMAGE_SERVER})...")
     client = _client()
 
     # Remove any proxy devices that conflict with in-use ports (best-effort)
