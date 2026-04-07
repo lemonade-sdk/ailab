@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 keywords = ["lxd", "ai", "sandbox", "ollama", "lemonade", "openclaw"]
+dependencies = [
+    "pylxd>=2.4.0",
+]
 
 [project.scripts]
 ailab = "ailab.cli:main"

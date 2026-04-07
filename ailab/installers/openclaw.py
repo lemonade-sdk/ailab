@@ -6,11 +6,14 @@ from ..container import (
     _container_name,
     _container_status,
     _current_user,
-    _lxc,
     _wait_for_ready,
+    add_proxy_device,
     container_config_dir,
+    container_exec,
+    has_device,
     push_file,
     set_container_env,
+    start_container,
     OUTBOUND_PROXIES,
 )
 
@@ -37,16 +40,12 @@ class OpenclawInstaller:
 
         if _container_status(cname) != "running":
             print(f"Starting container '{container_name}'...")
-            _lxc("start", cname)
-            _wait_for_ready(cname)
+            start_container(cname)
 
         # Per-container config dir (inside the bind-mounted home, so no extra mount)
         cfg_dir = container_config_dir(container_name, home) / "openclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        # Ensure correct ownership in case of re-install (previous run may have
-        # written files as container root, which maps to a different host UID).
-        _lxc("exec", cname, "--",
-             "chown", "-R", f"{uid}:{gid}", str(cfg_dir))
+        container_exec(cname, ["chown", "-R", f"{uid}:{gid}", str(cfg_dir)])
 
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)
@@ -81,30 +80,24 @@ class OpenclawInstaller:
         print("  Make sure lemonade-server is running on the host.")
 
     def _install_gateway_service(self, cname: str):
-        """Install openclaw's gateway as a system service (requires root).
-
-        openclaw onboard tries to do this itself but fails in LXD containers
-        because non-root users can't connect to the system D-Bus.  Running it
-        here as root pre-empts that failure.
-        """
-        _lxc(
-            "exec", cname,
-            "--env=HOME=/root",
-            "--",
-            "bash", "-c",
-            "openclaw gateway install 2>&1 || true",
+        """Install openclaw's gateway as a system service (requires root)."""
+        container_exec(
+            cname,
+            ["bash", "-c", "openclaw gateway install 2>&1 || true"],
+            env={"HOME": "/root"},
+            check=False,
         )
-        # Reload and enable regardless — openclaw gateway install may have
-        # written the unit file without reloading.
-        _lxc("exec", cname, "--",
-             "bash", "-c",
+        container_exec(
+            cname,
+            ["bash", "-c",
              "systemctl daemon-reload 2>/dev/null || true"
              " && systemctl enable openclaw-gateway 2>/dev/null || true"
-             " && systemctl start openclaw-gateway 2>/dev/null || true")
+             " && systemctl start openclaw-gateway 2>/dev/null || true"],
+            check=False,
+        )
 
     def _write_onboard_wrapper(self, cname: str, cfg_dir):
-        """Append a shell function that mirrors the ubuclaw launcher behaviour:
-        skip provider selection during 'openclaw onboard' when a config already exists."""
+        """Append a shell function that skips provider re-selection when a config exists."""
         config_file = cfg_dir / "openclaw.json"
         snippet = f"""
 # ailab: skip provider re-selection when config exists (mirrors ubuclaw).
@@ -118,65 +111,53 @@ openclaw() {{
   fi
 }}
 """
-        _lxc("exec", cname, "--",
-             "bash", "-c",
-             "cat >> /etc/profile.d/ailab-openclaw.sh",
-             input=snippet)
+        container_exec(
+            cname,
+            ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
+            stdin=snippet.encode(),
+        )
 
     def _install_shell_completion(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
-        """Install openclaw bash completion system-wide in the container.
-
-        Writes to /etc/bash_completion.d/openclaw so it is sourced unconditionally
-        for all users — more reliable than the user-dir lazy-loading path.
-        """
-        result = _lxc(
-            "exec", cname,
-            f"--user={uid}",
-            f"--group={gid}",
-            f"--env=HOME={home}",
-            f"--env=OPENCLAW_STATE_DIR={cfg_dir}",
-            f"--env=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json",
-            "--",
-            "bash", "-lc",
-            "openclaw completion --shell bash",
+        """Install openclaw bash completion system-wide in the container."""
+        exit_code, stdout, _ = container_exec(
+            cname,
+            ["bash", "-lc", "openclaw completion --shell bash"],
+            uid=uid, gid=gid,
+            env={
+                "HOME": home,
+                "OPENCLAW_STATE_DIR": str(cfg_dir),
+                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+            },
             check=False,
-            capture=True,
         )
-        if result.returncode != 0 or not result.stdout.strip():
+        if exit_code != 0 or not stdout.strip():
             print("  Warning: openclaw shell completion generation failed (non-fatal)")
             return
-        _lxc(
-            "exec", cname,
-            "--",
-            "bash", "-c",
-            "cat > /etc/bash_completion.d/openclaw",
-            input=result.stdout,
+        container_exec(
+            cname,
+            ["bash", "-c", "cat > /etc/bash_completion.d/openclaw"],
+            stdin=stdout.encode(),
         )
 
     def _npm_install(self, cname: str, uid: int):
         """Install openclaw globally via npm inside the container (as root)."""
-        _lxc(
-            "exec", cname,
-            "--env=HOME=/root",
-            "--",
-            "npm", "install", "-g", "openclaw",
+        container_exec(
+            cname,
+            ["npm", "install", "-g", "openclaw"],
+            env={"HOME": "/root"},
         )
 
     def _add_port_proxy(self, cname: str):
         """Add outbound proxy for openclaw's gateway port if not already present."""
         if any(port == OPENCLAW_GATEWAY_PORT for _, port in OUTBOUND_PROXIES):
             return
-
-        result = _lxc("config", "device", "show", cname, capture=True, check=False)
-        if result.returncode == 0 and OPENCLAW_PROXY_DEVICE in result.stdout:
+        if has_device(cname, OPENCLAW_PROXY_DEVICE):
             return
-
-        _lxc(
-            "config", "device", "add", cname,
-            OPENCLAW_PROXY_DEVICE, "proxy",
-            f"listen=tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
-            f"connect=tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
-            "bind=host",
+        add_proxy_device(
+            cname, OPENCLAW_PROXY_DEVICE,
+            f"tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
+            f"tcp:127.0.0.1:{OPENCLAW_GATEWAY_PORT}",
+            bind="host",
         )
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
@@ -186,13 +167,13 @@ openclaw() {{
 
         push_file(cname, "/tmp/setup_openclaw.js", script_content)
 
-        _lxc(
-            "exec", cname,
-            f"--user={uid}",
-            f"--group={gid}",
-            f"--env=HOME={home}",
-            f"--env=OPENCLAW_STATE_DIR={cfg_dir}",
-            f"--env=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json",
-            "--",
-            "node", "/tmp/setup_openclaw.js",
+        container_exec(
+            cname,
+            ["node", "/tmp/setup_openclaw.js"],
+            uid=uid, gid=gid,
+            env={
+                "HOME": home,
+                "OPENCLAW_STATE_DIR": str(cfg_dir),
+                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+            },
         )
