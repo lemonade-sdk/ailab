@@ -202,28 +202,16 @@ def _default_profile_devices() -> dict[str, dict[str, str]]:
 
 # ── Config dir ────────────────────────────────────────────────────────────────
 
-def _ailab_data_root() -> Path:
-    """Base directory for ailab's persistent data.
-
-    When running as a snap, use SNAP_COMMON (/var/snap/ailab/common) to
-    avoid snap's restriction on accessing hidden directories in $HOME.
-    Falls back to the standard XDG location for non-snap installs.
-    """
-    snap_common = os.environ.get("SNAP_COMMON")
-    if snap_common:
-        return Path(snap_common)
-    return Path(os.environ.get("XDG_DATA_HOME", "")) / "ailab" if os.environ.get("XDG_DATA_HOME") else Path.home() / ".local" / "share" / "ailab"
-
-
 def container_config_dir(name: str, home: str) -> Path:
-    """Per-container config directory on the host.
+    """Per-container config directory on the host (also accessible inside the
+    container at the same path via the home bind-mount).
 
-    Non-snap: inside the home bind-mount at home/.local/share/ailab/containers/{name}
-    Snap: under SNAP_COMMON/containers/{username}/{name} with a separate bind-mount.
+    When running as a snap the 'home' plug only allows non-hidden directories.
+    Use ~/snap/ailab/common/ (SNAP_USER_COMMON) which is non-hidden and
+    is inside the home bind-mount, so no extra LXD disk device is needed.
     """
-    if os.environ.get("SNAP_COMMON"):
-        username = Path(home).name
-        return _ailab_data_root() / "containers" / username / name
+    if os.environ.get("SNAP"):
+        return Path(home) / "snap" / "ailab" / "common" / "containers" / name
     return Path(home) / ".local" / "share" / "ailab" / "containers" / name
 
 
@@ -643,15 +631,6 @@ def create_container(
     # Home directory bind-mount
     devices["homedir"] = {"type": "disk", "source": home, "path": home}
 
-    # When running as snap, cfg_dir lives outside home (under SNAP_COMMON),
-    # so it needs its own bind-mount to be accessible inside the container.
-    if not str(cfg_dir).startswith(home):
-        devices["ailab-config"] = {
-            "type": "disk",
-            "source": str(cfg_dir),
-            "path": str(cfg_dir),
-        }
-
     # Inbound proxies: container localhost → host service
     for dev_name, port in INBOUND_PROXIES:
         devices[f"proxy-in-{dev_name}"] = {
@@ -965,9 +944,12 @@ def delete_container(name: str, force: bool = False):
         instance.stop(force=True, wait=True)
     instance.delete(wait=True)
 
-    if data_dir.exists():
-        print(f"Removing container data directory: {data_dir}")
-        shutil.rmtree(data_dir, ignore_errors=True)
+    try:
+        if data_dir.exists():
+            print(f"Removing container data directory: {data_dir}")
+            shutil.rmtree(data_dir, ignore_errors=True)
+    except OSError:
+        pass  # Path inaccessible (e.g. snap confinement on old-style hidden dir)
 
     print(f"Container '{name}' deleted.")
 
