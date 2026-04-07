@@ -208,6 +208,44 @@ def container_config_dir(name: str, home: str) -> Path:
     return Path(home) / ".local" / "share" / "ailab" / "containers" / name
 
 
+def build_shell_welcome(container_name: str) -> str:
+    """Build a contextual SHELL_WELCOME message based on installed tools."""
+    cname = _container_name(container_name)
+    _, _, _, home = get_container_user(cname)
+    cfg_root = container_config_dir(container_name, home)
+    openclaw_cfg = cfg_root / "openclaw" / "openclaw.json"
+    device_auth = cfg_root / "openclaw" / "identity" / "device-auth.json"
+
+    lines = ["Welcome to your AI Lab container!\n"]
+
+    if openclaw_cfg.exists():
+        if device_auth.exists():
+            lines += [
+                "openclaw is ready — launch the AI assistant:",
+                "  openclaw",
+                "",
+                "  Opens the TUI to chat with your local LLM.",
+                "  The gateway web UI is available at http://localhost:18789",
+            ]
+        else:
+            lines += [
+                "openclaw is installed but needs to be set up.",
+                "Run the setup wizard:",
+                "  openclaw onboard",
+                "",
+                "  This connects openclaw to your local LLM (lemonade/ollama).",
+                "  After onboarding, launch the TUI with:  openclaw",
+            ]
+    else:
+        lines += [
+            "No AI tools are installed yet.",
+            "From the host, install a tool into this container:",
+            "  ailab install openclaw " + container_name,
+        ]
+
+    return "\n".join(lines)
+
+
 # ── File push ─────────────────────────────────────────────────────────────────
 
 def push_file(cname: str, remote_path: str, content: bytes | str):
@@ -785,6 +823,7 @@ def run_container(name: str, post_cmds: list[str] | None = None):
         f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
         f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
         "--env=TERM=xterm-256color",
+        f"--env=SHELL_WELCOME={build_shell_welcome(name)}",
         f"--cwd={home}",
         "--",
         *exec_argv,

@@ -32,6 +32,7 @@ from ailab.container import (
     _user_info,
     add_port,
     add_proxy_device,
+    build_shell_welcome,
     container_config_dir,
     container_exec,
     create_container,
@@ -461,6 +462,7 @@ async def shell_ws(ws: WebSocket, name: str):
         f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
         f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
         "--env=TERM=xterm-256color",
+        f"--env=SHELL_WELCOME={build_shell_welcome(name)}",
         f"--cwd={home}", "--", "/bin/bash", "--login",
     ]
 
