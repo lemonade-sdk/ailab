@@ -34,8 +34,9 @@ export default function App() {
     <div className="min-h-screen bg-slate-900 text-slate-100">
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-2xl font-bold text-white">ailab</span>
-          <span className="text-slate-400 text-sm">LXD sandbox manager</span>
+          <span className="text-2xl font-bold text-white">AI Lab</span>
+          <span className="text-slate-500 mx-2">-</span>
+          <span className="text-slate-400 text-sm">Your AI in a Box</span>
         </div>
         <button
           onClick={() => setShowCreate(true)}
