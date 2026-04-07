@@ -56,6 +56,25 @@ def _current_user():
     return pw.pw_name, uid, gid, pw.pw_dir
 
 
+def _user_info(username: str) -> tuple[str, int, int, str]:
+    """Return (username, uid, gid, home) for the given username."""
+    pw = pwd.getpwnam(username)
+    return pw.pw_name, pw.pw_uid, pw.pw_gid, pw.pw_dir
+
+
+def list_system_users() -> list[dict]:
+    """Return all /etc/passwd users with UID >= 1000 (excludes nobody)."""
+    users = []
+    for pw in pwd.getpwall():
+        if pw.pw_uid >= 1000 and pw.pw_uid < 65534:
+            users.append({
+                "username": pw.pw_name,
+                "uid": pw.pw_uid,
+                "home": pw.pw_dir,
+            })
+    return sorted(users, key=lambda u: u["uid"])
+
+
 # ── Instance helpers ──────────────────────────────────────────────────────────
 
 def _get_instance(cname: str):
@@ -507,14 +526,23 @@ def ensure_ailab_project():
 
 # ── Container creation ────────────────────────────────────────────────────────
 
-def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | None = None):
+def create_container(
+    name: str,
+    extra_outbound_ports: list[tuple[int, int]] | None = None,
+    username: str | None = None,
+):
     """Create and fully configure a new ailab container.
 
     extra_outbound_ports: list of (host_port, container_port) tuples to add
                           in addition to the defaults.
+    username: the host user to map into the container; defaults to the
+              current user.  Useful when the server runs as root (e.g. snap).
     """
     cname = _container_name(name)
-    username, uid, gid, home = _current_user()
+    if username:
+        username, uid, gid, home = _user_info(username)
+    else:
+        username, uid, gid, home = _current_user()
 
     if _container_status(cname) != "missing":
         status = _container_status(cname)
@@ -577,6 +605,7 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
             "security.nesting": "true",
             "user.user-data": _cloud_init_userdata(username, uid, gid, home),
             f"environment.AILAB_CONFIG_DIR": str(cfg_dir),
+            "user.ailab-mapped-user": username,
         },
         "devices": devices,
     }

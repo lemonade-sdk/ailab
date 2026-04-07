@@ -1,4 +1,4 @@
-import { Container, Package, PortProxy, SSEEvent } from '../types';
+import { Container, Package, PortProxy, SSEEvent, SystemUser } from '../types';
 
 const BASE = '/api';
 
@@ -63,6 +63,10 @@ export async function gatewayPairStream(
   return streamSSE(`${BASE}/containers/${name}/gateway-pair`, {}, onEvent);
 }
 
+export async function getUsers(): Promise<SystemUser[]> {
+  return request<SystemUser[]>('/users');
+}
+
 export async function getPackages(): Promise<Package[]> {
   return request<Package[]>('/packages');
 }
@@ -103,8 +107,9 @@ export async function createContainerStream(
   packages: string[],
   extraPorts: Array<{ host_port: number; container_port: number }>,
   onEvent: (event: SSEEvent) => void,
+  username?: string,
 ): Promise<void> {
-  return streamSSE(`${BASE}/containers/create`, { name, packages, extra_ports: extraPorts }, onEvent);
+  return streamSSE(`${BASE}/containers/create`, { name, packages, extra_ports: extraPorts, username: username ?? null }, onEvent);
 }
 
 export async function installStream(

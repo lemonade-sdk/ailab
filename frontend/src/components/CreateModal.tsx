@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Package, SSEEvent } from '../types';
-import { getPackages, createContainerStream } from '../api/client';
+import { Package, SSEEvent, SystemUser } from '../types';
+import { getPackages, getUsers, createContainerStream } from '../api/client';
 
 interface Props {
   onClose: () => void;
@@ -11,6 +11,8 @@ export function CreateModal({ onClose, onDone }: Props) {
   const [name, setName] = useState('');
   const [packages, setPackages] = useState<Package[]>([]);
   const [selectedPackage, setSelectedPackage] = useState<string>('openclaw');
+  const [users, setUsers] = useState<SystemUser[]>([]);
+  const [selectedUser, setSelectedUser] = useState<string>('');
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
   const [log, setLog] = useState('');
   const [running, setRunning] = useState(false);
@@ -21,10 +23,14 @@ export function CreateModal({ onClose, onDone }: Props) {
   useEffect(() => {
     getPackages().then((pkgs) => {
       setPackages(pkgs);
-      // Keep 'openclaw' default if it exists, otherwise pick the first package
       if (!pkgs.find((p) => p.name === 'openclaw') && pkgs.length > 0) {
         setSelectedPackage(pkgs[0].name);
       }
+    }).catch(console.error);
+
+    getUsers().then((us) => {
+      setUsers(us);
+      if (us.length === 1) setSelectedUser(us[0].username);
     }).catch(console.error);
   }, []);
 
@@ -56,7 +62,7 @@ export function CreateModal({ onClose, onDone }: Props) {
         if (event.type === 'log') setLog((prev) => prev + event.msg + '\n');
         else if (event.type === 'done') setDone(true);
         else if (event.type === 'error') { setError(event.msg); setDone(true); }
-      });
+      }, selectedUser || undefined);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -83,6 +89,25 @@ export function CreateModal({ onClose, onDone }: Props) {
               className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
             />
           </div>
+
+          {users.length > 1 && (
+            <div>
+              <label className="block text-sm text-slate-300 mb-1">Map user into container</label>
+              <select
+                value={selectedUser}
+                onChange={(e) => setSelectedUser(e.target.value)}
+                disabled={running}
+                className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+              >
+                <option value="">— select user —</option>
+                {users.map((u) => (
+                  <option key={u.username} value={u.username}>
+                    {u.username} (uid {u.uid}) — {u.home}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm text-slate-300 mb-1">Install package</label>

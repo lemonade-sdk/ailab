@@ -29,6 +29,7 @@ from ailab.container import (
     _get_instance,
     _host_port_in_use,
     _partition_conflicting_proxies,
+    _user_info,
     add_port,
     add_proxy_device,
     container_config_dir,
@@ -37,6 +38,7 @@ from ailab.container import (
     delete_container,
     has_device,
     list_ports,
+    list_system_users,
     remove_port,
     remove_proxy_device,
     start_container,
@@ -70,6 +72,7 @@ class CreateContainerRequest(BaseModel):
     name: str
     packages: list[str] = []
     extra_ports: list[dict[str, Any]] = []
+    username: str | None = None
 
 
 class InstallRequest(BaseModel):
@@ -83,6 +86,22 @@ class AddPortRequest(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _get_container_user(cname: str) -> tuple[str, int, int, str]:
+    """Return (username, uid, gid, home) for the user mapped into a container.
+
+    Reads the 'user.ailab-mapped-user' config key stored in LXD at creation
+    time.  Falls back to the current process user for backward compatibility.
+    """
+    try:
+        instance = _client().instances.get(cname)
+        mapped = instance.config.get("user.ailab-mapped-user")
+        if mapped:
+            return _user_info(mapped)
+    except Exception:
+        pass
+    return _current_user()
 
 
 def _get_ipv4(client, cname: str) -> str:
@@ -117,7 +136,14 @@ def _outbound_ports_from_devices(devices: dict) -> list[int]:
 def _container_summary(c: dict, client) -> dict:
     """Build the summary dict for a single container metadata entry."""
     cname = c["name"]
-    _, _, _, home = _current_user()
+    mapped_user = c.get("config", {}).get("user.ailab-mapped-user")
+    if mapped_user:
+        try:
+            _, _, _, home = _user_info(mapped_user)
+        except KeyError:
+            _, _, _, home = _current_user()
+    else:
+        _, _, _, home = _current_user()
     devices = c.get("expanded_devices", {})
     return {
         "name": cname,
@@ -251,7 +277,7 @@ async def api_create_container(req: CreateContainerRequest):
     packages = req.packages or []
 
     def task():
-        create_container(req.name, extra_outbound_ports=extra_ports or None)
+        create_container(req.name, extra_outbound_ports=extra_ports or None, username=req.username or None)
         for pkg_name in packages:
             installer = get_installer(pkg_name)
             print(f"\nInstalling {pkg_name}...")
@@ -373,7 +399,8 @@ def _get_or_create_gateway_token(cfg_dir: Path, home: str) -> str:
 @app.get("/api/containers/{name}/gateway-url")
 async def api_gateway_url(name: str):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
-    _, _, _, home = _current_user()
+    cname = _container_name(name)
+    _, _, _, home = _get_container_user(cname)
     cfg_dir = container_config_dir(name, home) / "openclaw"
     token = _read_gateway_token(cfg_dir)
     if not token:
@@ -388,7 +415,7 @@ async def api_gateway_pair(name: str):
     if _container_status(cname) != "running":
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
-    username, uid, gid, home = _current_user()
+    username, uid, gid, home = _get_container_user(cname)
     cfg_dir = container_config_dir(name, home) / "openclaw"
 
     if not (cfg_dir / "openclaw.json").exists():
@@ -411,8 +438,8 @@ async def api_gateway_pair(name: str):
     return _sse_stream(task)
 
 
-# ── Packages endpoint ─────────────────────────────────────────────────────────
 
+# ── Packages endpoint ─────────────────────────────────────────────────────────
 
 @app.get("/api/packages")
 async def api_list_packages():
@@ -422,6 +449,12 @@ async def api_list_packages():
     ]
 
 
+@app.get("/api/users")
+async def api_list_users():
+    """Return host users with UID >= 1000 (candidates for container mapping)."""
+    return list_system_users()
+
+
 # ── WebSocket: PTY shell ──────────────────────────────────────────────────────
 
 
@@ -429,7 +462,7 @@ async def api_list_packages():
 async def shell_ws(ws: WebSocket, name: str):
     await ws.accept()
     cname = _container_name(name)
-    username, uid, gid, home = _current_user()
+    username, uid, gid, home = _get_container_user(cname)
     cmd = [
         "lxc", "--project", AILAB_PROJECT, "exec", cname,
         f"--user={uid}", f"--group={gid}",

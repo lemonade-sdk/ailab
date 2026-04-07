@@ -18,6 +18,12 @@ export interface Package {
   description: string;
 }
 
+export interface SystemUser {
+  username: string;
+  uid: number;
+  home: string;
+}
+
 export type SSEEvent =
   | { type: 'log'; msg: string }
   | { type: 'done' }
