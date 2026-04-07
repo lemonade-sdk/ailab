@@ -168,7 +168,11 @@ async function main() {
       defaults: {
         workspace:    WORKSPACE,
         sandbox:      { mode: 'off' },
-        model:        { primary: `lemonade/${primaryModel}` },
+        model:          { primary: `lemonade/${primaryModel}` },
+        // Disable thinking mode — local models via lemonade use --reasoning-format
+        // auto which strips <think> tokens into reasoning_content, leaving content
+        // empty and causing openclaw to receive a blank response and do nothing.
+        thinkingDefault: 'off',
       },
     },
   };
