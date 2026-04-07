@@ -12,7 +12,9 @@ import termios
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import pylxd.exceptions
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -127,6 +129,15 @@ def _sse_response(gen):
     )
 
 
+def _lxd_error(exc: Exception) -> HTTPException:
+    """Convert a pylxd exception into an appropriate HTTPException."""
+    if isinstance(exc, pylxd.exceptions.NotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, pylxd.exceptions.LXDAPIException):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
 def _sse_stream(task_fn):
     """
     Return a StreamingResponse that runs task_fn() in a thread executor,
@@ -184,7 +195,10 @@ async def api_list_containers():
 async def api_get_container(name: str):
     cname = _container_name(name)
     client = _client()
-    instance = _get_instance(cname)
+    try:
+        instance = _get_instance(cname)
+    except pylxd.exceptions.NotFound:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
     ipv4 = await asyncio.get_event_loop().run_in_executor(None, _get_ipv4, client, cname)
 
     devices = instance.expanded_devices or {}
@@ -244,21 +258,30 @@ async def api_start_container(name: str):
     cname = _container_name(name)
     instance = _get_instance(cname)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, lambda: instance.start(wait=True))
+    try:
+        await loop.run_in_executor(None, lambda: instance.start(wait=True))
+    except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
+        raise _lxd_error(exc)
     return {"status": "started", "name": name}
 
 
 @app.post("/api/containers/{name}/stop")
 async def api_stop_container(name: str):
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, stop_container, name)
+    try:
+        await loop.run_in_executor(None, stop_container, name)
+    except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
+        raise _lxd_error(exc)
     return {"status": "stopped", "name": name}
 
 
 @app.delete("/api/containers/{name}")
 async def api_delete_container(name: str):
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, lambda: delete_container(name, force=True))
+    try:
+        await loop.run_in_executor(None, lambda: delete_container(name, force=True))
+    except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
+        raise _lxd_error(exc)
     return {"status": "deleted", "name": name}
 
 
@@ -296,9 +319,12 @@ async def api_list_ports(name: str):
 @app.post("/api/containers/{name}/ports")
 async def api_add_port(name: str, req: AddPortRequest):
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None, add_port, name, req.host_port, req.container_port, req.direction
-    )
+    try:
+        await loop.run_in_executor(
+            None, add_port, name, req.host_port, req.container_port, req.direction
+        )
+    except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
+        raise _lxd_error(exc)
     return {"status": "added", "host_port": req.host_port, "container_port": req.container_port}
 
 
@@ -306,7 +332,10 @@ async def api_add_port(name: str, req: AddPortRequest):
 async def api_remove_port(name: str, device_name: str):
     cname = _container_name(name)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, remove_proxy_device, cname, device_name)
+    try:
+        await loop.run_in_executor(None, remove_proxy_device, cname, device_name)
+    except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
+        raise _lxd_error(exc)
     return {"status": "removed", "device": device_name}
 
 
