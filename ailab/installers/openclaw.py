@@ -85,26 +85,19 @@ class OpenclawInstaller:
         self._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
         self._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
 
-        # Read back the per-device operator token for display
-        device_auth = cfg_dir / "identity" / "device-auth.json"
-        device_token = self._read_device_token(device_auth)
-
         print()
         print(f"openclaw installed in '{container_name}'.")
         print()
         print(f"  Config:       {cfg_dir}/openclaw.json")
         print(f"  Start:        ailab run {container_name}")
         print("  Launch:       openclaw")
-        if device_token:
-            print(f"  Web UI:       http://localhost:18789/#token={device_token}")
-        else:
-            print("  Web UI:       http://localhost:18789")
+        print(f"  Web UI:       http://localhost:18789/#token={gateway_token}")
         print()
         print("  Lemonade is pre-configured via localhost proxy (port 8000).")
         print("  Make sure lemonade-server is running on the host.")
 
     def _install_gateway_service(self, cname: str, uid: int, gid: int, home: str):
-        """Install openclaw's gateway as a user-level systemd service."""
+        """Install openclaw's gateway as a user-level systemd service (unit only; do not enable yet)."""
         container_exec(
             cname,
             ["bash", "-c", "openclaw gateway install 2>&1 || true"],
@@ -112,11 +105,11 @@ class OpenclawInstaller:
             env={"HOME": home},
             check=False,
         )
+        # Only reload — do NOT enable/start yet.  The service needs the ailab
+        # drop-in (with OPENCLAW_STATE_DIR/CONFIG_PATH) before it first runs.
         container_exec(
             cname,
-            ["bash", "-c",
-             "systemctl --user daemon-reload 2>/dev/null || true"
-             " && systemctl --user enable openclaw-gateway 2>/dev/null || true"],
+            ["bash", "-c", "systemctl --user daemon-reload 2>/dev/null || true"],
             uid=uid, gid=gid,
             env={
                 "HOME": home,
@@ -133,13 +126,18 @@ class OpenclawInstaller:
     def _configure_gateway_env(
         self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
     ):
-        """Write gateway env vars to systemd user environment.d so the service picks them up."""
+        """Write gateway env vars to environment.d and a systemd service drop-in.
+
+        The drop-in ensures the gateway service always starts with the correct
+        state directory and token, regardless of how the user session was started.
+        """
         env_dir = Path(home) / ".config" / "environment.d"
         conf = (
             f"OPENCLAW_STATE_DIR={cfg_dir}\n"
             f"OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json\n"
             f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
         )
+        # Write environment.d for CLI / login-shell use
         container_exec(
             cname,
             ["bash", "-c", f"mkdir -p {env_dir} && cat > {env_dir}/ailab-openclaw.conf"],
@@ -147,12 +145,42 @@ class OpenclawInstaller:
             env={"HOME": home},
             stdin=conf.encode(),
         )
+        # Write a systemd service drop-in so the daemon always has the vars,
+        # even in a lingering session where environment.d may not be sourced.
+        dropin_dir = Path(home) / ".config" / "systemd" / "user" / "openclaw-gateway.service.d"
+        dropin = (
+            "[Service]\n"
+            f"Environment=OPENCLAW_STATE_DIR={cfg_dir}\n"
+            f"Environment=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json\n"
+            f"Environment=OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+        )
+        container_exec(
+            cname,
+            ["bash", "-c", f"mkdir -p {dropin_dir} && cat > {dropin_dir}/ailab.conf"],
+            uid=uid, gid=gid,
+            env={"HOME": home},
+            stdin=dropin.encode(),
+        )
         # Also add OPENCLAW_GATEWAY_TOKEN to the login profile for CLI use
         snippet = f"\nexport OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
         container_exec(
             cname,
             ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
             stdin=snippet.encode(),
+        )
+        # Now enable the service (drop-in is in place, safe to start)
+        container_exec(
+            cname,
+            ["bash", "-c",
+             "systemctl --user daemon-reload 2>/dev/null || true"
+             " && systemctl --user enable openclaw-gateway 2>/dev/null || true"],
+            uid=uid, gid=gid,
+            env={
+                "HOME": home,
+                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            },
+            check=False,
         )
 
     def _run_onboard(

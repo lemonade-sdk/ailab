@@ -210,22 +210,30 @@ def container_config_dir(name: str, home: str) -> Path:
 
 def build_shell_welcome(container_name: str) -> str:
     """Build a contextual SHELL_WELCOME message based on installed tools."""
+    import json as _json
     cname = _container_name(container_name)
     _, _, _, home = get_container_user(cname)
     cfg_root = container_config_dir(container_name, home)
-    openclaw_cfg = cfg_root / "openclaw" / "openclaw.json"
-    device_auth = cfg_root / "openclaw" / "identity" / "device-auth.json"
+    openclaw_json = cfg_root / "openclaw" / "openclaw.json"
 
     lines = ["Welcome to your AI Lab container!\n"]
 
-    if openclaw_cfg.exists():
-        if device_auth.exists():
+    if openclaw_json.exists():
+        # Read gateway shared token from config — used in the dashboard URL
+        gateway_token = None
+        try:
+            data = _json.loads(openclaw_json.read_text())
+            gateway_token = data.get("gateway", {}).get("auth", {}).get("token")
+        except Exception:
+            pass
+
+        if gateway_token:
             lines += [
                 "openclaw is ready — launch the AI assistant:",
                 "  openclaw",
                 "",
                 "  Opens the TUI to chat with your local LLM.",
-                "  The gateway web UI is available at http://localhost:18789",
+                f"  The gateway web UI is available at http://localhost:18789/#token={gateway_token}",
             ]
         else:
             lines += [

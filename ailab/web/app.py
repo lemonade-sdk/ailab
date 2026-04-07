@@ -365,13 +365,18 @@ async def api_remove_port(name: str, device_name: str):
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
 def _read_gateway_token(cfg_dir: Path) -> str | None:
-    """Read the per-device operator token from device-auth.json."""
-    device_auth = cfg_dir / "identity" / "device-auth.json"
-    if not device_auth.exists():
+    """Read the gateway shared token from openclaw.json (used in the dashboard URL).
+
+    The dashboard URL format is http://localhost:18789/#token=<GATEWAY_SHARED_TOKEN>.
+    This is the gateway auth token stored under gateway.auth.token in openclaw.json.
+    Only present once openclaw has been onboarded.
+    """
+    openclaw_json = cfg_dir / "openclaw.json"
+    if not openclaw_json.exists():
         return None
     try:
-        data = json.loads(device_auth.read_text())
-        return data.get("tokens", {}).get("operator", {}).get("token")
+        data = json.loads(openclaw_json.read_text())
+        return data.get("gateway", {}).get("auth", {}).get("token")
     except Exception:
         return None
 
