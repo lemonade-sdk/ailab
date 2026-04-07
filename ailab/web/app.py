@@ -44,6 +44,10 @@ from ailab.container import (
     OUTBOUND_PROXIES,
 )
 from ailab.installers import INSTALLERS, get_installer
+from ailab.installers.openclaw import (
+    OPENCLAW_GATEWAY_PORT,
+    OpenclawInstaller,
+)
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -341,9 +345,29 @@ async def api_remove_port(name: str, device_name: str):
     return {"status": "removed", "device": device_name}
 
 
-# ── Gateway URL endpoint ──────────────────────────────────────────────────────
+# ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
-OPENCLAW_GATEWAY_PORT = 18789
+def _read_gateway_token(cfg_dir: Path) -> str | None:
+    """Read the per-device operator token from device-auth.json."""
+    device_auth = cfg_dir / "identity" / "device-auth.json"
+    if not device_auth.exists():
+        return None
+    try:
+        data = json.loads(device_auth.read_text())
+        return data.get("tokens", {}).get("operator", {}).get("token")
+    except Exception:
+        return None
+
+
+def _get_or_create_gateway_token(cfg_dir: Path, home: str) -> str:
+    """Return the existing gateway shared token from environment.d, or generate a new one."""
+    import secrets as _secrets
+    env_conf = Path(home) / ".config" / "environment.d" / "ailab-openclaw.conf"
+    if env_conf.exists():
+        for line in env_conf.read_text().splitlines():
+            if line.startswith("OPENCLAW_GATEWAY_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    return _secrets.token_urlsafe(32)
 
 
 @app.get("/api/containers/{name}/gateway-url")
@@ -351,20 +375,40 @@ async def api_gateway_url(name: str):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     _, _, _, home = _current_user()
     cfg_dir = container_config_dir(name, home) / "openclaw"
-    device_auth = cfg_dir / "identity" / "device-auth.json"
-    if not device_auth.exists():
+    token = _read_gateway_token(cfg_dir)
+    if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
-    try:
-        import json as _json
-        data = _json.loads(device_auth.read_text())
-        token = data.get("tokens", {}).get("operator", {}).get("token")
-        if not token:
-            raise HTTPException(status_code=404, detail="openclaw operator token not found")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
     return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
+
+
+@app.post("/api/containers/{name}/gateway-pair")
+async def api_gateway_pair(name: str):
+    """Run openclaw onboard inside the container to pair the gateway device."""
+    cname = _container_name(name)
+    if _container_status(cname) != "running":
+        raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
+
+    username, uid, gid, home = _current_user()
+    cfg_dir = container_config_dir(name, home) / "openclaw"
+
+    if not (cfg_dir / "openclaw.json").exists():
+        raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
+
+    installer = OpenclawInstaller()
+
+    def task():
+        gateway_token = _get_or_create_gateway_token(cfg_dir, home)
+        print("Configuring gateway environment...")
+        installer._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
+        print("Pairing gateway device (this takes ~10 seconds)...")
+        installer._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+        token = _read_gateway_token(cfg_dir)
+        if token:
+            print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")
+        else:
+            print("Warning: pairing may not have succeeded — check container logs")
+
+    return _sse_stream(task)
 
 
 # ── Packages endpoint ─────────────────────────────────────────────────────────

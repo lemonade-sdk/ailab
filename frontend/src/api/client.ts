@@ -56,6 +56,13 @@ export async function getGatewayUrl(name: string): Promise<{ url: string }> {
   return request<{ url: string }>(`/containers/${name}/gateway-url`);
 }
 
+export async function gatewayPairStream(
+  name: string,
+  onEvent: (event: SSEEvent) => void,
+): Promise<void> {
+  return streamSSE(`${BASE}/containers/${name}/gateway-pair`, {}, onEvent);
+}
+
 export async function getPackages(): Promise<Package[]> {
   return request<Package[]>('/packages');
 }
