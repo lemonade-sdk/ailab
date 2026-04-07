@@ -202,9 +202,28 @@ def _default_profile_devices() -> dict[str, dict[str, str]]:
 
 # ── Config dir ────────────────────────────────────────────────────────────────
 
+def _ailab_data_root() -> Path:
+    """Base directory for ailab's persistent data.
+
+    When running as a snap, use SNAP_COMMON (/var/snap/ailab/common) to
+    avoid snap's restriction on accessing hidden directories in $HOME.
+    Falls back to the standard XDG location for non-snap installs.
+    """
+    snap_common = os.environ.get("SNAP_COMMON")
+    if snap_common:
+        return Path(snap_common)
+    return Path(os.environ.get("XDG_DATA_HOME", "")) / "ailab" if os.environ.get("XDG_DATA_HOME") else Path.home() / ".local" / "share" / "ailab"
+
+
 def container_config_dir(name: str, home: str) -> Path:
-    """Per-container config directory on the host (also accessible inside the
-    container at the same path, because the home dir is bind-mounted)."""
+    """Per-container config directory on the host.
+
+    Non-snap: inside the home bind-mount at home/.local/share/ailab/containers/{name}
+    Snap: under SNAP_COMMON/containers/{username}/{name} with a separate bind-mount.
+    """
+    if os.environ.get("SNAP_COMMON"):
+        username = Path(home).name
+        return _ailab_data_root() / "containers" / username / name
     return Path(home) / ".local" / "share" / "ailab" / "containers" / name
 
 
@@ -623,6 +642,15 @@ def create_container(
 
     # Home directory bind-mount
     devices["homedir"] = {"type": "disk", "source": home, "path": home}
+
+    # When running as snap, cfg_dir lives outside home (under SNAP_COMMON),
+    # so it needs its own bind-mount to be accessible inside the container.
+    if not str(cfg_dir).startswith(home):
+        devices["ailab-config"] = {
+            "type": "disk",
+            "source": str(cfg_dir),
+            "path": str(cfg_dir),
+        }
 
     # Inbound proxies: container localhost → host service
     for dev_name, port in INBOUND_PROXIES:
