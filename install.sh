@@ -10,6 +10,16 @@ echo "Installing ailab..."
 COMPLETIONS="$HOME/.local/share/bash-completion/completions"
 mkdir -p "$COMPLETIONS"
 
+# Build the web frontend if npm is available
+if command -v npm &>/dev/null; then
+    echo "Building web frontend..."
+    (cd "$SCRIPT_DIR/frontend" && npm install --silent && npm run build --silent)
+else
+    echo "Warning: npm not found — skipping frontend build."
+    echo "  'ailab web' will start but serve no UI."
+    echo "  Install Node.js and re-run install.sh to enable the web interface."
+fi
+
 # pipx is the cleanest option - isolated venv, adds to PATH automatically
 if command -v pipx &>/dev/null; then
     pipx install --editable "$SCRIPT_DIR"
