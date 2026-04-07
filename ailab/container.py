@@ -46,11 +46,16 @@ def _admin_client() -> pylxd.Client:
 def find_lxc() -> str:
     """Return the absolute path to the lxc binary.
 
-    Checks known snap and system locations before falling back to PATH.
-    This is important when running inside a snap daemon whose PATH may not
-    include /snap/bin.
+    When running inside a snap, AppArmor blocks executing /snap/bin/lxc
+    (a snapd wrapper script).  Use the real binary from the lxd snap
+    directly, following the 'current' symlink to the versioned path.
+    Falls back to system paths and PATH for non-snap installs.
     """
-    for candidate in ("/snap/bin/lxc", "/usr/bin/lxc", "/usr/local/bin/lxc"):
+    # Prefer the real lxd snap binary (AppArmor-safe from inside another snap)
+    lxd_snap = "/snap/lxd/current/bin/lxc"
+    if os.path.isfile(lxd_snap) and os.access(lxd_snap, os.X_OK):
+        return lxd_snap
+    for candidate in ("/usr/bin/lxc", "/usr/local/bin/lxc"):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     found = shutil.which("lxc")
