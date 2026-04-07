@@ -914,7 +914,8 @@ def completion_container_names() -> list[str]:
 # ── Delete ────────────────────────────────────────────────────────────────────
 
 def delete_container(name: str, force: bool = False):
-    """Stop and delete a container."""
+    """Stop and delete a container and its host-side data directory."""
+    import shutil
     cname = _container_name(name)
     if _container_status(cname) == "missing":
         print(f"Container '{name}' not found.")
@@ -926,10 +927,19 @@ def delete_container(name: str, force: bool = False):
             print("Aborted.")
             return
 
+    # Read the mapped user before deletion so we know where data lives.
+    _, _, _, home = get_container_user(cname)
+    data_dir = container_config_dir(name, home)
+
     print(f"Deleting container '{name}'...")
     instance = _get_instance(cname)
     if instance.status == "Running":
         instance.stop(force=True, wait=True)
     instance.delete(wait=True)
+
+    if data_dir.exists():
+        print(f"Removing container data directory: {data_dir}")
+        shutil.rmtree(data_dir, ignore_errors=True)
+
     print(f"Container '{name}' deleted.")
 
