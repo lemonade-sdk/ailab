@@ -12,3 +12,4 @@ debian/ailab.prerm.debhelper
 debian/ailab.substvars
 debian/debhelper-build-stamp
 debian/files
+ailab/web/static/

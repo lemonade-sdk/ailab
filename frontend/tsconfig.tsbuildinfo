@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/api/client.ts","./src/components/ContainerList.tsx","./src/components/CreateModal.tsx","./src/components/InstallModal.tsx","./src/components/LogStream.tsx","./src/components/PortManager.tsx","./src/components/Terminal.tsx"],"version":"5.9.3"}

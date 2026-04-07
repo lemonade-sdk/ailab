@@ -91,6 +91,13 @@ def cmd_packages(args):
         print(f"{name:<20} {inst.description}")
 
 
+def cmd_web(args):
+    import uvicorn
+    from .web.app import app
+    print(f"Starting ailab web interface at http://{args.host}:{args.port}")
+    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+
+
 def cmd_complete(args):
     if args.kind == "packages":
         for name in sorted(INSTALLERS):
@@ -263,6 +270,13 @@ examples:
     p_complete = sub.add_parser("_complete", help=argparse.SUPPRESS)
     p_complete.add_argument("kind", choices=["commands", "containers", "packages", "port-actions"])
     p_complete.set_defaults(func=cmd_complete)
+
+    # ── web ────────────────────────────────────────────────────────────────────
+    p_web = sub.add_parser("web", help="Start the ailab web management interface")
+    p_web.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+    p_web.add_argument("--port", "-p", type=int, default=8080, help="Port to listen on (default: 8080)")
+    p_web.add_argument("--reload", action="store_true", help="Enable auto-reload (development)")
+    p_web.set_defaults(func=cmd_web)
 
     # ── port ───────────────────────────────────────────────────────────────────
     p_port = sub.add_parser("port", help="Manage port proxies for a sandbox")
