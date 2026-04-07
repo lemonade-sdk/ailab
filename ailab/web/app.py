@@ -509,7 +509,7 @@ async def shell_ws(ws: WebSocket, name: str):
             uuid = op["operation"].split("/")[-1]
             fds = op["metadata"]["metadata"]["fds"]
             data_secret = fds["0"]
-            ctrl_secret = fds["-1"]
+            ctrl_secret = fds["control"]
 
             ws_url = "http://localhost/1.0/operations/{}/websocket".format(uuid)
 
@@ -609,20 +609,39 @@ async def logs_ws(ws: WebSocket, name: str):
 
             uuid = op["operation"].split("/")[-1]
             fds = op["metadata"]["metadata"]["fds"]
-            data_secret = fds["0"]
+            ctrl_secret = fds["control"]
 
             ws_url = "http://localhost/1.0/operations/{}/websocket".format(uuid)
-            async with http.ws_connect(ws_url, params={"secret": data_secret}) as lxd_ws:
-                async for msg in lxd_ws:
-                    if msg.type == aiohttp.WSMsgType.BINARY:
-                        text = msg.data.decode(errors="replace")
-                        for line in text.splitlines():
-                            await ws.send_text(line)
-                    elif msg.type == aiohttp.WSMsgType.TEXT:
-                        for line in msg.data.splitlines():
-                            await ws.send_text(line)
-                    elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                        break
+            # Must connect to BOTH channels before LXD starts the exec
+            async with http.ws_connect(ws_url, params={"secret": fds["0"]}) as lxd_ws, \
+                       http.ws_connect(ws_url, params={"secret": ctrl_secret}) as _ctrl_ws:
+
+                async def lxd_to_browser():
+                    async for msg in lxd_ws:
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            text = msg.data.decode(errors="replace")
+                            for line in text.splitlines():
+                                await ws.send_text(line)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                            break
+
+                async def wait_for_disconnect():
+                    try:
+                        while True:
+                            msg = await ws.receive()
+                            if msg.get("type") == "websocket.disconnect":
+                                break
+                    except WebSocketDisconnect:
+                        pass
+
+                t1 = asyncio.ensure_future(lxd_to_browser())
+                t2 = asyncio.ensure_future(wait_for_disconnect())
+                try:
+                    await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for task in [t1, t2]:
+                        task.cancel()
+                    await asyncio.gather(t1, t2, return_exceptions=True)
 
     except WebSocketDisconnect:
         pass
