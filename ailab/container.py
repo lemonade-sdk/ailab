@@ -2,6 +2,7 @@
 
 import os
 import pwd
+import socket
 import sys
 import textwrap
 import time
@@ -25,10 +26,10 @@ INBOUND_PROXIES = [
 
 # Ports proxied FROM the container to the host (host browser → container service)
 # Web UIs running in the container are accessible on the host at the same port.
+# Note: tool-specific ports (e.g. 3000 for nullclaw, 18789 for openclaw) are
+# added by the individual installers, not here.
 OUTBOUND_PROXIES = [
-    ("web-3000",  3000),   # node/react dev servers
     ("web-7860",  7860),   # gradio
-    ("web-8080",  8080),   # generic
     ("web-8888",  8888),   # jupyter
     ("web-8501",  8501),   # streamlit
     ("web-9090",  9090),   # prometheus / generic
@@ -108,6 +109,44 @@ def _wait_for_ready(cname: str, timeout: int = 30):
             pass
         time.sleep(2)
     raise TimeoutError(f"Container {cname} not ready after {timeout}s")
+
+
+def _host_port_in_use(port: int) -> bool:
+    """Return True if a TCP port is already bound on the host."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
+def _partition_conflicting_proxies(
+    devices: dict,
+) -> tuple[dict, dict]:
+    """Split devices into (conflicting_outbound_proxies, rest).
+
+    conflicting: outbound proxy devices whose host listen port is already in use.
+    rest: all other devices (safe to apply before starting).
+    """
+    conflicting: dict = {}
+    rest: dict = {}
+    for name, cfg in devices.items():
+        if (
+            cfg.get("type") == "proxy"
+            and cfg.get("bind", "host") == "host"
+            and ":" in cfg.get("listen", "")
+        ):
+            try:
+                port = int(cfg["listen"].rsplit(":", 1)[-1])
+                if _host_port_in_use(port):
+                    conflicting[name] = cfg
+                    continue
+            except ValueError:
+                pass
+        rest[name] = cfg
+    return conflicting, rest
 
 
 # ── Default profile devices ───────────────────────────────────────────────────
@@ -264,9 +303,38 @@ def remove_proxy_device(cname: str, device_name: str):
 # ── Start container (used by installers) ─────────────────────────────────────
 
 def start_container(cname: str):
-    """Start a stopped container and wait until it is ready."""
-    _get_instance(cname).start(wait=True)
+    """Start a stopped container and wait until it is ready.
+
+    Proxy devices whose host port is already bound by another process are
+    temporarily removed before starting and restored afterwards so that the
+    container can still start even when another container holds a shared port.
+    """
+    instance = _get_instance(cname)
+    conflicting, safe_devices = _partition_conflicting_proxies(instance.devices or {})
+
+    if conflicting:
+        names = ", ".join(sorted(conflicting))
+        print(f"Warning: host ports already in use — skipping proxy device(s): {names}")
+        instance.devices = safe_devices
+        instance.save(wait=True)
+
+    try:
+        instance.start(wait=True)
+    except pylxd.exceptions.LXDAPIException:
+        if conflicting:
+            # Restore removed devices even on failure
+            instance = _get_instance(cname)
+            instance.devices = {**instance.devices, **conflicting}
+            instance.save(wait=True)
+        raise
+
     _wait_for_ready(cname)
+
+    if conflicting:
+        # Restore the proxy devices so they work when the port is freed later
+        instance = _get_instance(cname)
+        instance.devices = {**instance.devices, **conflicting}
+        instance.save(wait=True)
 
 
 # ── Cloud-init user-data ──────────────────────────────────────────────────────

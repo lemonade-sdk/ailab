@@ -238,13 +238,14 @@ Your Host
 └── ailab container (LXD)
     ├── localhost:8000   →  host:8000   (lemonade, inbound proxy)
     ├── localhost:11434  →  host:11434  (ollama, inbound proxy)
-    ├── host:3000        →  container:3000   (web UI, outbound proxy)
     ├── host:7860        →  container:7860   (gradio)
-    ├── host:8080        →  container:8080
     ├── host:8888        →  container:8888   (jupyter)
     ├── host:8501        →  container:8501   (streamlit)
     └── host:9090        →  container:9090
 ```
+
+Tool-specific ports (e.g. nullclaw :3000, openclaw :18789) are added when
+the package is installed, not at container creation time.
 
 **LXD REST API**: All container operations use the LXD REST API via `pylxd`,
 not the `lxc` CLI. Container setup runs via cloud-init at creation time,
@@ -272,16 +273,20 @@ These ports are forwarded from every new container to your host by default:
 
 | Port | Common Use |
 |------|-----------|
-| 3000 | Node/React dev servers, nullclaw gateway |
 | 7860 | Gradio |
-| 8080 | General web servers |
 | 8888 | Jupyter |
 | 8501 | Streamlit |
 | 9090 | Prometheus, general |
 
 Additional ports are forwarded when specific packages are installed:
+- nullclaw: 3000
 - openclaw: 18789
 - picoclaw: 18800
+
+When multiple containers are running, ailab automatically skips proxy devices
+whose host port is already bound, so containers can start without conflicts.
+Conflicting proxies are restored to the config so they activate once the port
+is freed.
 
 ## Tips
 

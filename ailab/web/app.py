@@ -27,6 +27,8 @@ from ailab.container import (
     _container_status,
     _current_user,
     _get_instance,
+    _host_port_in_use,
+    _partition_conflicting_proxies,
     add_port,
     add_proxy_device,
     container_config_dir,
@@ -37,6 +39,7 @@ from ailab.container import (
     list_ports,
     remove_port,
     remove_proxy_device,
+    start_container,
     stop_container,
     OUTBOUND_PROXIES,
 )
@@ -256,10 +259,9 @@ async def api_create_container(req: CreateContainerRequest):
 @app.post("/api/containers/{name}/start")
 async def api_start_container(name: str):
     cname = _container_name(name)
-    instance = _get_instance(cname)
     loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(None, lambda: instance.start(wait=True))
+        await loop.run_in_executor(None, start_container, cname)
     except (pylxd.exceptions.LXDAPIException, pylxd.exceptions.NotFound) as exc:
         raise _lxd_error(exc)
     return {"status": "started", "name": name}
