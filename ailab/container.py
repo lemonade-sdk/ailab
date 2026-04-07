@@ -500,7 +500,13 @@ def _cloud_init_userdata(username: str, uid: int, gid: int, home: str) -> str:
         EXISTING_USER=$(getent passwd "$USER_UID" | cut -d: -f1 || true)
         if [ -n "${EXISTING_USER:-}" ] && [ "$EXISTING_USER" != "$USERNAME" ]; then
             log "Renaming user '$EXISTING_USER' -> '$USERNAME'"
-            usermod -l "$USERNAME" -d "$USER_HOME" -s /bin/bash "$EXISTING_USER"
+            # Kill any processes still running as the old user (cloud-init may
+            # leave a session behind) so usermod doesn't fail with "user in use"
+            loginctl terminate-user "$EXISTING_USER" 2>/dev/null || true
+            pkill -u "$EXISTING_USER" -9 2>/dev/null || true
+            sleep 0.5
+            usermod -l "$USERNAME" -d "$USER_HOME" -s /bin/bash "$EXISTING_USER" \
+                || log "Warning: user rename failed (non-fatal, uid=$USER_UID still valid)"
         elif [ -z "${EXISTING_USER:-}" ]; then
             useradd --uid "$USER_UID" --gid "$USER_GID" --shell /bin/bash \
                     --no-create-home --home-dir "$USER_HOME" "$USERNAME"
