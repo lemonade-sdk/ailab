@@ -640,8 +640,12 @@ def create_container(
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    # Ensure the mapped user owns the directory (important when running as root)
-    os.chown(cfg_dir, uid, gid)
+    # Ensure the mapped user can write into the directory.  Prefer chown, but
+    # fall back to chmod 0o777 when running under snap (seccomp blocks chown).
+    try:
+        os.chown(cfg_dir, uid, gid)
+    except OSError:
+        cfg_dir.chmod(0o777)
 
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
