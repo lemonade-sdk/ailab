@@ -202,16 +202,32 @@ def _default_profile_devices() -> dict[str, dict[str, str]]:
 
 # ── Config dir ────────────────────────────────────────────────────────────────
 
-def container_config_dir(name: str, home: str) -> Path:
-    """Per-container config directory on the host (also accessible inside the
-    container at the same path via the home bind-mount).
+def _ailab_data_root() -> Path:
+    """Base directory for ailab's persistent data.
 
-    When running as a snap the 'home' plug only allows non-hidden directories.
-    Use ~/snap/ailab/common/ (SNAP_USER_COMMON) which is non-hidden and
-    is inside the home bind-mount, so no extra LXD disk device is needed.
+    When running as a snap, use SNAP_COMMON (/var/snap/ailab/common) which is
+    always accessible to the snap daemon regardless of which user it runs as.
+    Falls back to the standard XDG location for non-snap installs.
     """
-    if os.environ.get("SNAP"):
-        return Path(home) / "snap" / "ailab" / "common" / "containers" / name
+    snap_common = os.environ.get("SNAP_COMMON")
+    if snap_common:
+        return Path(snap_common)
+    if xdg := os.environ.get("XDG_DATA_HOME"):
+        return Path(xdg) / "ailab"
+    return Path.home() / ".local" / "share" / "ailab"
+
+
+def container_config_dir(name: str, home: str) -> Path:
+    """Per-container config directory on the host.
+
+    Non-snap: inside the home bind-mount at home/.local/share/ailab/containers/{name}
+    Snap: under SNAP_COMMON/containers/{username}/{name}.  The directory is
+    chowned to the mapped user so the in-container user can write to it, and
+    a separate LXD disk device mounts it at the same path inside the container.
+    """
+    if os.environ.get("SNAP_COMMON"):
+        username = Path(home).name
+        return _ailab_data_root() / "containers" / username / name
     return Path(home) / ".local" / "share" / "ailab" / "containers" / name
 
 
@@ -624,12 +640,23 @@ def create_container(
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
+    # Ensure the mapped user owns the directory (important when running as root)
+    os.chown(cfg_dir, uid, gid)
 
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
 
     # Home directory bind-mount
     devices["homedir"] = {"type": "disk", "source": home, "path": home}
+
+    # When running as snap, cfg_dir lives under SNAP_COMMON (outside home),
+    # so it needs its own bind-mount to be accessible inside the container.
+    if not str(cfg_dir).startswith(home):
+        devices["ailab-config"] = {
+            "type": "disk",
+            "source": str(cfg_dir),
+            "path": str(cfg_dir),
+        }
 
     # Inbound proxies: container localhost → host service
     for dev_name, port in INBOUND_PROXIES:
