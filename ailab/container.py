@@ -767,6 +767,9 @@ def delete_container(name: str, force: bool = False):
             return
 
     print(f"Deleting container '{name}'...")
-    _get_instance(cname).delete(force=True, wait=True)
+    instance = _get_instance(cname)
+    if instance.status == "Running":
+        instance.stop(force=True, wait=True)
+    instance.delete(wait=True)
     print(f"Container '{name}' deleted.")
 
