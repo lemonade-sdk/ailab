@@ -385,14 +385,12 @@ def _read_gateway_token(cfg_dir: Path) -> str | None:
         return None
 
 
-def _get_or_create_gateway_token(cfg_dir: Path, home: str) -> str:
-    """Return the existing gateway shared token from environment.d, or generate a new one."""
+def _get_or_create_gateway_token(cfg_dir: Path) -> str:
+    """Return the existing gateway shared token from openclaw.json, or generate a new one."""
     import secrets as _secrets
-    env_conf = Path(home) / ".config" / "environment.d" / "ailab-openclaw.conf"
-    if env_conf.exists():
-        for line in env_conf.read_text().splitlines():
-            if line.startswith("OPENCLAW_GATEWAY_TOKEN="):
-                return line.split("=", 1)[1].strip()
+    token = _read_gateway_token(cfg_dir)
+    if token:
+        return token
     return _secrets.token_urlsafe(32)
 
 
@@ -424,7 +422,7 @@ async def api_gateway_pair(name: str):
     installer = OpenclawInstaller()
 
     def task():
-        gateway_token = _get_or_create_gateway_token(cfg_dir, home)
+        gateway_token = _get_or_create_gateway_token(cfg_dir)
         print("Configuring gateway environment...")
         installer._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
         print("Pairing gateway device (this takes ~10 seconds)...")
