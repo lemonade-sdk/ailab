@@ -43,6 +43,17 @@ def _admin_client() -> pylxd.Client:
     return pylxd.Client()
 
 
+def _find_lxd_socket() -> str:
+    """Return the path to the LXD Unix socket."""
+    for path in [
+        "/var/snap/lxd/common/lxd/unix.socket",
+        "/var/lib/lxd/unix.socket",
+    ]:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError("LXD Unix socket not found")
+
+
 def find_lxc() -> str:
     """Return the absolute path to the lxc binary.
 

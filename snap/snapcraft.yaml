@@ -63,6 +63,7 @@ parts:
       - pylxd>=2.4.0
       - fastapi>=0.110.0
       - uvicorn[standard]>=0.29.0
+      - aiohttp>=3.9.0
     after:
       - frontend
     override-build: |

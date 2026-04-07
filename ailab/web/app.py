@@ -1,18 +1,15 @@
 """FastAPI web management interface for ailab."""
 
 import asyncio
-import fcntl
 import io
 import json
 import logging
 import os
-import pty
-import struct
 import sys
-import termios
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 import pylxd.exceptions
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -27,6 +24,7 @@ from ailab.container import (
     _container_name,
     _container_status,
     _current_user,
+    _find_lxd_socket,
     _get_instance,
     _host_port_in_use,
     _partition_conflicting_proxies,
@@ -38,7 +36,6 @@ from ailab.container import (
     container_exec,
     create_container,
     delete_container,
-    find_lxc,
     get_container_user,
     has_device,
     list_ports,
@@ -459,80 +456,119 @@ async def api_list_users():
 @app.websocket("/api/ws/shell/{name}")
 async def shell_ws(ws: WebSocket, name: str):
     await ws.accept()
-    master_fd = None
-    proc = None
+    cname = _container_name(name)
+    username, uid, gid, home = _get_container_user(cname)
+
     try:
-        cname = _container_name(name)
-        username, uid, gid, home = _get_container_user(cname)
-        try:
-            welcome = build_shell_welcome(name)
-        except Exception as exc:
-            logger.warning("build_shell_welcome failed for %s: %s", name, exc)
-            welcome = "Welcome to your AI Lab container!"
-        cmd = [
-            find_lxc(), "--project", AILAB_PROJECT, "exec", cname,
-            f"--user={uid}", f"--group={gid}",
-            f"--env=HOME={home}", f"--env=USER={username}",
-            f"--env=LOGNAME={username}",
-            f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
-            f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
-            "--env=TERM=xterm-256color",
-            f"--env=SHELL_WELCOME={welcome}",
-            f"--cwd={home}", "--", "/bin/bash", "--login",
-        ]
-
-        master_fd, slave_fd = pty.openpty()
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        loop = asyncio.get_event_loop()
-
-        async def pty_reader():
-            while True:
-                try:
-                    data = await loop.run_in_executor(None, lambda: os.read(master_fd, 4096))
-                    await ws.send_bytes(data)
-                except (OSError, WebSocketDisconnect):
-                    break
-
-        async def ws_reader():
-            while True:
-                try:
-                    msg = await ws.receive()
-                    if "bytes" in msg:
-                        os.write(master_fd, msg["bytes"])
-                    elif "text" in msg:
-                        data = json.loads(msg["text"])
-                        if data.get("type") == "resize":
-                            cols, rows = int(data["cols"]), int(data["rows"])
-                            fcntl.ioctl(
-                                master_fd, termios.TIOCSWINSZ,
-                                struct.pack("HHHH", rows, cols, 0, 0),
-                            )
-                except (WebSocketDisconnect, Exception):
-                    break
-
-        await asyncio.gather(pty_reader(), ws_reader(), return_exceptions=True)
-
+        welcome = build_shell_welcome(name)
     except Exception as exc:
-        logger.error("shell_ws error for container %s: %s", name, exc, exc_info=True)
+        logger.warning("build_shell_welcome failed for %s: %s", name, exc)
+        welcome = "Welcome to your AI Lab container!"
+
+    exec_data = {
+        "command": ["/bin/bash", "--login"],
+        "environment": {
+            "HOME": home,
+            "USER": username,
+            "LOGNAME": username,
+            "TERM": "xterm-256color",
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            "SHELL_WELCOME": welcome,
+        },
+        "interactive": True,
+        "wait-for-websocket": True,
+        "cwd": home,
+        "user": uid,
+        "group": gid,
+    }
+
+    try:
+        socket_path = _find_lxd_socket()
+    except FileNotFoundError as exc:
+        logger.error("LXD socket not found: %s", exc)
+        await ws.send_text("\r\n[error: LXD socket not found]\r\n")
+        return
+
+    try:
+        connector = aiohttp.UnixConnector(path=socket_path)
+        async with aiohttp.ClientSession(connector=connector) as http:
+            async with http.post(
+                "http://localhost/1.0/instances/{}/exec".format(cname),
+                params={"project": AILAB_PROJECT},
+                json=exec_data,
+            ) as resp:
+                op = await resp.json()
+
+            if op.get("status_code") not in (100, 200):
+                err = op.get("error", "unknown error")
+                logger.error("LXD exec failed for %s: %s", cname, err)
+                await ws.send_text(f"\r\n[error: {err}]\r\n")
+                return
+
+            uuid = op["operation"].split("/")[-1]
+            fds = op["metadata"]["metadata"]["fds"]
+            data_secret = fds["0"]
+            ctrl_secret = fds["-1"]
+
+            ws_url = "http://localhost/1.0/operations/{}/websocket".format(uuid)
+
+            async with http.ws_connect(ws_url, params={"secret": data_secret}) as lxd_data, \
+                       http.ws_connect(ws_url, params={"secret": ctrl_secret}) as lxd_ctrl:
+
+                async def lxd_to_browser():
+                    async for msg in lxd_data:
+                        if msg.type == aiohttp.WSMsgType.BINARY:
+                            await ws.send_bytes(msg.data)
+                        elif msg.type == aiohttp.WSMsgType.TEXT:
+                            await ws.send_text(msg.data)
+                        elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                            break
+
+                async def browser_to_lxd():
+                    while True:
+                        try:
+                            msg = await ws.receive()
+                        except WebSocketDisconnect:
+                            break
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                        raw_bytes = msg.get("bytes")
+                        raw_text = msg.get("text")
+                        if raw_bytes is not None:
+                            await lxd_data.send_bytes(raw_bytes)
+                        elif raw_text is not None:
+                            try:
+                                data = json.loads(raw_text)
+                                if data.get("type") == "resize":
+                                    cols = int(data["cols"])
+                                    rows = int(data["rows"])
+                                    await lxd_ctrl.send_json({
+                                        "command": "window-resize",
+                                        "args": {"width": cols, "height": rows},
+                                    })
+                            except Exception:
+                                await lxd_data.send_str(raw_text)
+
+                t1 = asyncio.ensure_future(lxd_to_browser())
+                t2 = asyncio.ensure_future(browser_to_lxd())
+                try:
+                    done, pending = await asyncio.wait(
+                        [t1, t2], return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    for task in [t1, t2]:
+                        task.cancel()
+                    await asyncio.gather(t1, t2, return_exceptions=True)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.error("shell_ws error for %s: %s", name, exc, exc_info=True)
         try:
             await ws.send_text(f"\r\n[shell error: {exc}]\r\n")
         except Exception:
             pass
-    finally:
-        if master_fd is not None:
-            try:
-                os.close(master_fd)
-            except OSError:
-                pass
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
 
 
 # ── WebSocket: log tail ───────────────────────────────────────────────────────
@@ -542,20 +578,58 @@ async def shell_ws(ws: WebSocket, name: str):
 async def logs_ws(ws: WebSocket, name: str):
     await ws.accept()
     cname = _container_name(name)
-    proc = await asyncio.create_subprocess_exec(
-        "lxc", "--project", AILAB_PROJECT, "exec", cname, "--",
-        "journalctl", "-f", "-n", "50", "--no-pager",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+
+    exec_data = {
+        "command": ["journalctl", "-f", "-n", "50", "--no-pager"],
+        "environment": {"TERM": "dumb"},
+        "interactive": True,
+        "wait-for-websocket": True,
+    }
+
     try:
-        async for line in proc.stdout:
-            await ws.send_text(line.decode(errors="replace").rstrip())
+        socket_path = _find_lxd_socket()
+    except FileNotFoundError as exc:
+        await ws.send_text(f"[error: LXD socket not found: {exc}]")
+        return
+
+    try:
+        connector = aiohttp.UnixConnector(path=socket_path)
+        async with aiohttp.ClientSession(connector=connector) as http:
+            async with http.post(
+                "http://localhost/1.0/instances/{}/exec".format(cname),
+                params={"project": AILAB_PROJECT},
+                json=exec_data,
+            ) as resp:
+                op = await resp.json()
+
+            if op.get("status_code") not in (100, 200):
+                err = op.get("error", "unknown error")
+                await ws.send_text(f"[error: {err}]")
+                return
+
+            uuid = op["operation"].split("/")[-1]
+            fds = op["metadata"]["metadata"]["fds"]
+            data_secret = fds["0"]
+
+            ws_url = "http://localhost/1.0/operations/{}/websocket".format(uuid)
+            async with http.ws_connect(ws_url, params={"secret": data_secret}) as lxd_ws:
+                async for msg in lxd_ws:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        text = msg.data.decode(errors="replace")
+                        for line in text.splitlines():
+                            await ws.send_text(line)
+                    elif msg.type == aiohttp.WSMsgType.TEXT:
+                        for line in msg.data.splitlines():
+                            await ws.send_text(line)
+                    elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                        break
+
     except WebSocketDisconnect:
         pass
-    finally:
+    except Exception as exc:
+        logger.error("logs_ws error for %s: %s", name, exc, exc_info=True)
         try:
-            proc.terminate()
+            await ws.send_text(f"[log error: {exc}]")
         except Exception:
             pass
 
