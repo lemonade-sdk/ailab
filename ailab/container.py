@@ -123,7 +123,7 @@ def _mkdir_as_user(path: Path, username: str, uid: int, gid: int):
         path.chmod(0o777)
 
 
-
+def list_system_users() -> list[dict]:
     """Return all /etc/passwd users with UID >= 1000 (excludes nobody)."""
     users = []
     for pw in pwd.getpwall():
