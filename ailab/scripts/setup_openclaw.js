@@ -50,18 +50,19 @@ const CONFIG_DIR  = path.join(HOME, '.openclaw');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'openclaw.json');
 const WORKSPACE   = path.join(HOME, 'workspace');
 
-// Preferred Qwen models in priority order (highest preference first).
+// Preferred models in priority order (highest preference first).
 const PREFERRED_MODELS = [
   'Qwen3.5-27B-GGUF',
   'Qwen3.5-9B-GGUF',
   'Qwen3-8B-GGUF',
+  'Qwen3-4B-Instruct-2507-GGUF',
   'Qwen3.5-4B-GGUF',
   'Qwen3-4B-GGUF',
   'Qwen3.5-2B-GGUF',
   'Qwen3-1.7B-GGUF',
 ];
 
-const FALLBACK_MODEL = 'Qwen3.5-9B-GGUF';
+const FALLBACK_MODEL = 'Qwen3-4B-Instruct-2507-GGUF';
 
 function runCurl(args) {
   const result = spawnSync('curl', args, {
@@ -115,6 +116,23 @@ function pullLemonadeModel(baseUrl, modelName) {
   }
 }
 
+function loadLemonadeModel(baseUrl, modelName) {
+  try {
+    runCurl([
+      '-fsS',
+      '--connect-timeout', '3',
+      '--max-time', '10',
+      '-X', 'POST',
+      '-H', 'Content-Type: application/json',
+      '-d', JSON.stringify({ model_name: modelName }),
+      `${baseUrl}/load`,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function choosePreferredModel(downloadedIds) {
   for (const preferred of PREFERRED_MODELS) {
     if (downloadedIds.has(preferred)) {
@@ -156,15 +174,27 @@ async function main() {
   if (preferredModel) {
     primaryModel = preferredModel;
   } else {
-    if (!downloadedIds.has(FALLBACK_MODEL)) {
+    if (modelIds !== null && !downloadedIds.has(FALLBACK_MODEL)) {
       const pullStarted = pullLemonadeModel(LEMONADE.baseUrl, FALLBACK_MODEL);
       if (pullStarted) {
-        console.log(`ailab: requested lemonade download for fallback model ${FALLBACK_MODEL}`);
-      } else if (modelIds) {
+        console.log(`ailab: requested lemonade download for ${FALLBACK_MODEL}`);
+      } else {
         console.log(`ailab: could not request lemonade download for ${FALLBACK_MODEL}`);
       }
     }
     downloadedIds.add(FALLBACK_MODEL);
+  }
+
+  // Tell lemonade to load the primary model so it is ready when the user
+  // opens openclaw for the first time.
+  if (modelIds !== null) {
+    console.log(`ailab: requesting lemonade load for ${primaryModel}...`);
+    const loaded = loadLemonadeModel(LEMONADE.baseUrl, primaryModel);
+    if (loaded) {
+      console.log(`ailab: lemonade model ${primaryModel} loaded`);
+    } else {
+      console.log(`ailab: lemonade load request failed for ${primaryModel} (non-fatal)`);
+    }
   }
 
   const normModels = sortModelsForConfig(downloadedIds).map(id => ({
