@@ -57,7 +57,7 @@ snap set ailab web.host=127.0.0.1   # default: 127.0.0.1
 snap set ailab web.port=11500        # default: 11500
 ```
 
-Then open `http://localhost:11500` in your browser.
+Then open `http://127.0.0.1:11500` in your browser.
 
 ### From the PPA
 
@@ -200,7 +200,7 @@ ailab web --port 9000        # use a different port
 ailab web --reload           # auto-reload on code changes (development)
 ```
 
-Then open `http://localhost:11500` in your browser.
+Then open `http://127.0.0.1:11500` in your browser.
 
 ### `ailab port`
 
@@ -227,9 +227,9 @@ ailab port remove mybox 9000
 
 | Package | Status | Description |
 |---------|--------|-------------|
-| `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://localhost:18789`. |
-| `nullclaw` | Experimental (CLI only) | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://localhost:3000`. |
-| `picoclaw` | Experimental (CLI only) | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://localhost:18800`. |
+| `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://127.0.0.1:18789`. |
+| `nullclaw` | Experimental (CLI only) | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://127.0.0.1:3000`. |
+| `picoclaw` | Experimental (CLI only) | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://127.0.0.1:18800`. |
 
 All packages use lemonade-server as the primary provider via its
 OpenAI-compatible API, with cloud providers disabled. lemonade-server is
@@ -300,7 +300,7 @@ is freed.
 ## Tips
 
 **Web interface**: `ailab web` serves a React dashboard at
-`http://localhost:11500`. The frontend communicates with a FastAPI backend
+`http://127.0.0.1:11500`. The frontend communicates with a FastAPI backend
 over REST, SSE (for live creation/install progress), and WebSockets
 (interactive terminal and log tail).
 
