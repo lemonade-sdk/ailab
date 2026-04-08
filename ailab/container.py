@@ -95,7 +95,35 @@ def _user_info(username: str) -> tuple[str, int, int, str]:
     return pw.pw_name, pw.pw_uid, pw.pw_gid, pw.pw_dir
 
 
-def list_system_users() -> list[dict]:
+def _mkdir_as_user(path: Path, username: str, uid: int, gid: int):
+    """Create a directory (and parents) owned by the target user.
+
+    The snap daemon's AppArmor profile uses the ``owner`` qualifier on the
+    ``home`` interface, which blocks even root from creating files in a user's
+    home directory.  Creating the directory as the target user (via runuser)
+    satisfies that constraint.  Falls back to a plain mkdir when runuser is
+    unavailable (non-snap / CI environments).
+    """
+    import subprocess
+    if path.exists():
+        return
+    # Try via runuser (requires the calling process to be root)
+    result = subprocess.run(
+        ["runuser", "-u", username, "--", "mkdir", "-p", str(path)],
+        check=False,
+    )
+    if path.exists():
+        return
+    # Fallback: direct creation (works when running as the target user already,
+    # or in non-snap installs without AppArmor restrictions).
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(path, uid, gid)
+    except OSError:
+        path.chmod(0o777)
+
+
+
     """Return all /etc/passwd users with UID >= 1000 (excludes nobody)."""
     users = []
     for pw in pwd.getpwall():
@@ -695,11 +723,7 @@ def create_container(
     # This is bind-mounted as the container user's home so the container only
     # sees this subdirectory, not the full host home.
     container_home = _container_home_dir(home, name)
-    container_home.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chown(container_home, uid, gid)
-    except OSError:
-        container_home.chmod(0o777)
+    _mkdir_as_user(container_home, username, uid, gid)
 
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
