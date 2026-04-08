@@ -250,18 +250,29 @@ def _ailab_data_root() -> Path:
     return Path.home() / ".local" / "share" / "ailab"
 
 
+def _container_home_dir(home: str, name: str) -> Path:
+    """Host-side isolated home directory for a container.
+
+    Created at $HOME/ailab/{name} and bind-mounted as the container user's
+    home directory.  Only this subdirectory (not the full host home) is
+    visible inside the container.
+    """
+    return Path(home) / "ailab" / name
+
+
 def container_config_dir(name: str, home: str) -> Path:
     """Per-container config directory on the host.
 
-    Non-snap: inside the home bind-mount at home/.local/share/ailab/containers/{name}
-    Snap: under SNAP_COMMON/containers/{username}/{name}.  The directory is
-    chowned to the mapped user so the in-container user can write to it, and
-    a separate LXD disk device mounts it at the same path inside the container.
+    Snap:     under SNAP_COMMON/containers/{username}/{name}.  The directory
+              is chowned to the mapped user and gets its own LXD disk device
+              so it's accessible inside the container at the same path.
+    Non-snap: inside the container's isolated home directory ($HOME/ailab/{name}).
+              No extra device needed — it's already in the home bind-mount.
     """
     if os.environ.get("SNAP_COMMON"):
         username = Path(home).name
         return _ailab_data_root() / "containers" / username / name
-    return Path(home) / ".local" / "share" / "ailab" / "containers" / name
+    return _container_home_dir(home, name)
 
 
 def build_shell_welcome(container_name: str) -> str:
@@ -680,6 +691,16 @@ def create_container(
 
     ensure_ailab_project()
 
+    # Create the isolated container home directory on the host.
+    # This is bind-mounted as the container user's home so the container only
+    # sees this subdirectory, not the full host home.
+    container_home = _container_home_dir(home, name)
+    container_home.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(container_home, uid, gid)
+    except OSError:
+        container_home.chmod(0o777)
+
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -693,12 +714,12 @@ def create_container(
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
 
-    # Home directory bind-mount
-    devices["homedir"] = {"type": "disk", "source": home, "path": home}
+    # Home directory bind-mount: isolated $HOME/ailab/{name} → container home
+    devices["homedir"] = {"type": "disk", "source": str(container_home), "path": home}
 
-    # When running as snap, cfg_dir lives under SNAP_COMMON (outside home),
-    # so it needs its own bind-mount to be accessible inside the container.
-    if not str(cfg_dir).startswith(home):
+    # When running as snap, cfg_dir lives under SNAP_COMMON (outside the
+    # container home), so it needs its own bind-mount inside the container.
+    if not str(cfg_dir).startswith(str(container_home)):
         devices["ailab-config"] = {
             "type": "disk",
             "source": str(cfg_dir),
@@ -1023,43 +1044,58 @@ def delete_container(name: str, force: bool = False):
     # Read the mapped user before deletion so we know where data lives.
     _, _, _, home = get_container_user(cname)
     data_dir = container_config_dir(name, home)
+    container_home = _container_home_dir(home, name)
 
-    # Validate the path is within the expected parent before any destructive op.
-    expected_parent = _ailab_data_root() / "containers"
-    try:
-        data_dir.resolve().relative_to(expected_parent.resolve())
-        safe_to_remove = True
-    except ValueError:
-        print(f"Warning: unexpected data dir path {data_dir}, skipping removal")
-        safe_to_remove = False
+    def _safe_path(path: Path, expected_parent: Path) -> bool:
+        """Return True if path is safely within expected_parent."""
+        try:
+            path.resolve().relative_to(expected_parent.resolve())
+            return True
+        except ValueError:
+            print(f"Warning: unexpected path {path}, skipping removal")
+            return False
+
+    safe_data = _safe_path(data_dir, _ailab_data_root() / "containers")
+    safe_home = _safe_path(container_home, Path(home) / "ailab")
 
     print(f"Deleting container '{name}'...")
     instance = _get_instance(cname)
 
-    # Delete data dir from inside the container while it's still accessible.
-    # Files in data_dir are owned by the LXD-mapped user uid; deleting them as
-    # container-root bypasses host-side ownership restrictions (AppArmor or
-    # non-root snap daemon).
-    if safe_to_remove and data_dir.exists() and instance.status == "Running":
-        container_exec(
-            cname,
-            ["rm", "-rf", str(data_dir)],
-            check=False,
-        )
-
     if instance.status == "Running":
+        # Delete config dir and home contents from inside the container as root.
+        # Files are owned by the LXD-mapped user uid; container-root can delete
+        # them, bypassing host-side ownership restrictions.
+        if safe_data and data_dir != container_home and data_dir.exists():
+            container_exec(cname, ["rm", "-rf", str(data_dir)], check=False)
+        if safe_home and container_home.exists():
+            # Clear all content inside the home mount point; can't remove the
+            # mount point itself from inside the container.
+            container_exec(
+                cname,
+                ["bash", "-c", f"find {home} -mindepth 1 -delete 2>/dev/null || true"],
+                check=False,
+            )
         instance.stop(force=True, wait=True)
     instance.delete(wait=True)
 
-    # Clean up any remnants the in-container delete missed (e.g. container
-    # was already stopped, or the disk device wasn't mounted).
-    if safe_to_remove and data_dir.exists():
-        print(f"Removing container data directory: {data_dir}")
-        result = subprocess.run(["rm", "-rf", str(data_dir)], check=False)
-        if result.returncode != 0 or data_dir.exists():
-            shutil.rmtree(data_dir, ignore_errors=True)
-        if data_dir.exists():
-            print(f"Warning: could not fully remove {data_dir}")
+    # Host-side cleanup of any remnants (container was stopped, or in-container
+    # delete only partially succeeded).
+    for path, safe in [(data_dir, safe_data), (container_home, safe_home)]:
+        if safe and path.exists():
+            print(f"Removing {path}")
+            result = subprocess.run(["rm", "-rf", str(path)], check=False)
+            if result.returncode != 0 or path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                print(f"Warning: could not fully remove {path}")
+
+    # Remove the ~/ailab parent if it's now empty
+    ailab_dir = Path(home) / "ailab"
+    if ailab_dir.exists():
+        try:
+            ailab_dir.rmdir()  # only succeeds if empty
+        except OSError:
+            pass
 
     print(f"Container '{name}' deleted.")
 
