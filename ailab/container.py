@@ -109,7 +109,10 @@ def _chown(path: Path, uid: int, gid: int):
         return
     except OSError:
         pass
-    result = subprocess.run(["chown", f"{uid}:{gid}", str(path)], check=False)
+    result = subprocess.run(
+        ["chown", f"{uid}:{gid}", str(path)],
+        check=False, stderr=subprocess.DEVNULL,
+    )
     if result.returncode == 0:
         return
     path.chmod(0o777)
