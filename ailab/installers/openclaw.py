@@ -69,6 +69,10 @@ class OpenclawInstaller:
         self._write_host_token(container_name, uid, gid, home, gateway_token)
         self._configure_gateway_env(cname, uid, gid, home, gateway_token)
         self._run_onboard(cname, uid, gid, home, gateway_token)
+        # Onboard pairs the TUI device with only operator.read scope; upgrade
+        # it to full operator scopes so the TUI can connect without hitting
+        # scope-upgrade rejections from the persistent gateway.
+        self._approve_tui_device_scopes(cname, uid, gid, home)
 
         # Run provider setup AFTER onboard so openclaw's rewrite of
         # openclaw.json during onboard doesn't discard the lemonade config.
@@ -298,6 +302,74 @@ systemctl --user start openclaw-gateway 2>/dev/null || true
             ["bash", "-c", script],
             uid=uid, gid=gid,
             env=env,
+            check=False,
+        )
+
+    def _approve_tui_device_scopes(self, cname: str, uid: int, gid: int, home: str):
+        """Upgrade the TUI (gateway-client) device to full operator scopes in paired.json.
+
+        openclaw onboard pairs the TUI device with only operator.read scope.
+        The persistent gateway then rejects scope-upgrade requests (code 1008),
+        leaving the TUI stuck in 'Pairing required'.  We patch paired.json and
+        pending.json directly so the gateway loads the correct scopes on startup.
+        """
+        full_scopes = [
+            "operator.admin",
+            "operator.approvals",
+            "operator.pairing",
+            "operator.read",
+            "operator.write",
+        ]
+        patch_py = (
+            "import json, os\n"
+            "home = os.environ['HOME']\n"
+            "devices_dir = os.path.join(home, '.openclaw', 'devices')\n"
+            "paired_path  = os.path.join(devices_dir, 'paired.json')\n"
+            "pending_path = os.path.join(devices_dir, 'pending.json')\n"
+            f"full_scopes = {full_scopes!r}\n"
+            "\n"
+            "# Patch paired.json — grant full scopes to the TUI device\n"
+            "try:\n"
+            "    paired = json.loads(open(paired_path).read())\n"
+            "except Exception:\n"
+            "    paired = {}\n"
+            "devices = paired.get('devices', [])\n"
+            "patched = 0\n"
+            "for dev in devices:\n"
+            "    if dev.get('clientId') == 'gateway-client' or dev.get('clientMode') == 'backend':\n"
+            "        dev['scopes']         = full_scopes\n"
+            "        dev['approvedScopes'] = full_scopes\n"
+            "        for tok in dev.get('tokens', {}).values():\n"
+            "            if isinstance(tok, dict) and 'scopes' in tok:\n"
+            "                tok['scopes'] = full_scopes\n"
+            "        patched += 1\n"
+            "if patched:\n"
+            "    open(paired_path, 'w').write(json.dumps(paired, indent=2) + '\\n')\n"
+            "    print(f'ailab: patched {patched} TUI device(s) to full operator scopes')\n"
+            "else:\n"
+            "    print('ailab: TUI device not found in paired.json (non-fatal)')\n"
+            "\n"
+            "# Clear pending scope-upgrade requests for the TUI device\n"
+            "try:\n"
+            "    pending = json.loads(open(pending_path).read())\n"
+            "    reqs = pending.get('requests', [])\n"
+            "    before = len(reqs)\n"
+            "    reqs = [r for r in reqs\n"
+            "            if not (r.get('clientId') == 'gateway-client'\n"
+            "                    or r.get('clientMode') == 'backend')]\n"
+            "    if len(reqs) != before:\n"
+            "        pending['requests'] = reqs\n"
+            "        open(pending_path, 'w').write(json.dumps(pending, indent=2) + '\\n')\n"
+            "        print(f'ailab: cleared {before - len(reqs)} pending TUI scope-upgrade request(s)')\n"
+            "except Exception:\n"
+            "    pass\n"
+        )
+        container_exec(
+            cname,
+            ["python3"],
+            uid=uid, gid=gid,
+            stdin=patch_py.encode(),
+            env={"HOME": home},
             check=False,
         )
 
