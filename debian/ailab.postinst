@@ -19,7 +19,7 @@ case "$1" in
 
         if ! snap list lemonade-server >/dev/null 2>&1 \
             && ! dpkg-query -W -f='${Status}' lemonade-server 2>/dev/null | grep -q "install ok installed" \
-            && ! ss -tlnp 2>/dev/null | grep -q ':8000 '; then
+            && ! ss -tlnp 2>/dev/null | grep -qE ':8000 |:13305 '; then
             echo "ailab: installing lemonade-server snap..."
             snap install lemonade-server
         fi
@@ -39,8 +39,16 @@ case "$1" in
                     usermod -aG lxd "$user"
                 fi
             done
-            echo "ailab: users added to the lxd group will need to reboot before using ailab."
+            echo "ailab: users added to the lxd group will need to log out and back in before using ailab."
         fi
+
+        echo ""
+        echo "ailab is ready. To start the web management interface:"
+        echo "  ailab web"
+        echo ""
+        echo "To enable it as a user service that starts automatically:"
+        echo "  systemctl --user enable --now ailab-web"
+        echo ""
         ;;
 esac
 
