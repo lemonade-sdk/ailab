@@ -52,7 +52,6 @@ const WORKSPACE   = path.join(HOME, 'workspace');
 
 // Preferred models in priority order (highest preference first).
 const PREFERRED_MODELS = [
-  'Qwen3.5-27B-GGUF',
   'Qwen3.5-9B-GGUF',
   'Qwen3-8B-GGUF',
   'Qwen3-4B-Instruct-2507-GGUF',
