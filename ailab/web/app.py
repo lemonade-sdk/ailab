@@ -21,7 +21,6 @@ from pydantic import BaseModel
 from ailab.container import (
     AILAB_PROJECT,
     _client,
-    _container_home_dir,
     _container_name,
     _container_status,
     _current_user,
@@ -33,6 +32,7 @@ from ailab.container import (
     add_port,
     add_proxy_device,
     build_shell_welcome,
+    container_config_dir,
     container_exec,
     create_container,
     delete_container,
@@ -384,22 +384,25 @@ async def api_remove_port(name: str, device_name: str):
 
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
-def _read_gateway_token(openclaw_dir: Path) -> str | None:
-    """Read the gateway shared token from ~/.openclaw/openclaw.json."""
-    openclaw_json = openclaw_dir / "openclaw.json"
-    if not openclaw_json.exists():
-        return None
-    try:
-        data = json.loads(openclaw_json.read_text())
-        return data.get("gateway", {}).get("auth", {}).get("token")
-    except Exception:
-        return None
+def _read_gateway_token(token_dir: Path) -> str | None:
+    """Read the gateway shared token from the host-side gateway-token file.
+
+    token_dir is container_config_dir(name, home) / "openclaw" — a directory
+    created by the installer process with host-owned permissions, readable by
+    the snap web service regardless of LXD subuid ownership.
+    """
+    token_file = token_dir / "gateway-token"
+    if token_file.exists():
+        token = token_file.read_text().strip()
+        if token:
+            return token
+    return None
 
 
-def _get_or_create_gateway_token(openclaw_dir: Path) -> str:
-    """Return the existing gateway shared token from openclaw.json, or generate a new one."""
+def _get_or_create_gateway_token(token_dir: Path) -> str:
+    """Return the existing gateway shared token, or generate a new one."""
     import secrets as _secrets
-    token = _read_gateway_token(openclaw_dir)
+    token = _read_gateway_token(token_dir)
     if token:
         return token
     return _secrets.token_urlsafe(32)
@@ -410,8 +413,8 @@ async def api_gateway_url(name: str):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
     _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
-    openclaw_dir = _container_home_dir(home, name) / ".openclaw"
-    token = _read_gateway_token(openclaw_dir)
+    token_dir = container_config_dir(name, home) / "openclaw"
+    token = _read_gateway_token(token_dir)
     if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
     return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
@@ -426,25 +429,31 @@ async def api_gateway_pair(name: str):
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    openclaw_dir = _container_home_dir(home, name) / ".openclaw"
+    token_dir = container_config_dir(name, home) / "openclaw"
 
-    if not openclaw_dir.exists():
+    if not (token_dir / "gateway-token").exists():
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
     installer = OpenclawInstaller()
 
     def task():
-        gateway_token = _get_or_create_gateway_token(openclaw_dir)
+        gateway_token = _get_or_create_gateway_token(token_dir)
+        # Refresh the host-side token file in case it was regenerated.
+        token_dir.mkdir(parents=True, exist_ok=True)
+        (token_dir / "gateway-token").write_text(gateway_token)
         print("Configuring gateway environment...")
         installer._configure_gateway_env(cname, uid, gid, home, gateway_token)
 
-        # If openclaw is already onboarded (has device state), just restart the
-        # gateway service with the refreshed env — no need to re-run onboard.
-        already_onboarded = any(
-            (openclaw_dir / d).exists()
-            for d in ("devices", "identity")
+        # If openclaw is already onboarded (has device state in ~/.openclaw/),
+        # just restart the gateway service — no need to re-run onboard.
+        rc, _, _ = container_exec(
+            cname,
+            ["bash", "-c", f"test -d '{home}/.openclaw/devices' || test -d '{home}/.openclaw/identity'"],
+            uid=uid, gid=gid,
+            env={"HOME": home},
+            check=False,
         )
-        if already_onboarded:
+        if rc == 0:
             print("openclaw already onboarded — restarting gateway service...")
             installer._restart_gateway(cname, uid, gid, home)
         else:
@@ -452,7 +461,7 @@ async def api_gateway_pair(name: str):
             installer._run_onboard(cname, uid, gid, home, gateway_token)
             installer._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
 
-        token = _read_gateway_token(openclaw_dir)
+        token = _read_gateway_token(token_dir)
         if token:
             print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")
         else:

@@ -1,6 +1,7 @@
 """Installer for openclaw inside an ailab container."""
 
 import importlib.resources
+import os
 import secrets
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from ..container import (
     _container_name,
     _container_status,
     add_proxy_device,
+    container_config_dir,
     container_exec,
     get_container_user,
     has_device,
@@ -64,6 +66,9 @@ class OpenclawInstaller:
 
         print("Pairing openclaw gateway device (generating access token)...")
         gateway_token = self._generate_gateway_token(uid)
+        # Write token to a host-side path so the web UI can read it without
+        # needing to access the container's subuid-owned filesystem.
+        self._write_host_token(container_name, uid, gid, home, gateway_token)
         self._configure_gateway_env(cname, uid, gid, home, gateway_token)
         self._run_onboard(cname, uid, gid, home, gateway_token)
         # Re-patch after onboard in case openclaw rewrote openclaw.json
@@ -107,6 +112,27 @@ class OpenclawInstaller:
     def _generate_gateway_token(self, uid: int) -> str:
         """Generate a random gateway shared token for the openclaw gateway."""
         return secrets.token_urlsafe(32)
+
+    def _write_host_token(
+        self, container_name: str, uid: int, gid: int, home: str, gateway_token: str
+    ):
+        """Write the gateway token to a host-side file under container_config_dir.
+
+        This keeps the token readable by the host/snap process regardless of
+        LXD subuid ownership on files inside the container's bind-mounted home.
+        """
+        token_dir = container_config_dir(container_name, home) / "openclaw"
+        token_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chown(token_dir, uid, gid)
+        except OSError:
+            token_dir.chmod(0o777)
+        token_file = token_dir / "gateway-token"
+        token_file.write_text(gateway_token)
+        try:
+            os.chown(token_file, uid, gid)
+        except OSError:
+            token_file.chmod(0o644)
 
     def _patch_gateway_token_in_json(
         self, cname: str, uid: int, gid: int, home: str, gateway_token: str

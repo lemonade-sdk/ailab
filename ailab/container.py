@@ -304,21 +304,16 @@ def container_config_dir(name: str, home: str) -> Path:
 
 def build_shell_welcome(container_name: str) -> str:
     """Build a contextual SHELL_WELCOME message based on installed tools."""
-    import json as _json
     cname = _container_name(container_name)
     _, _, _, home = get_container_user(cname)
-    openclaw_json = _container_home_dir(home, container_name) / ".openclaw" / "openclaw.json"
+    # Token lives in the host-side config dir (created by the installer with
+    # host ownership), not inside the container's subuid-owned home.
+    token_file = container_config_dir(container_name, home) / "openclaw" / "gateway-token"
 
     lines = ["Welcome to your AI Lab container!\n"]
 
-    if openclaw_json.exists():
-        # Read gateway shared token from config — used in the dashboard URL
-        gateway_token = None
-        try:
-            data = _json.loads(openclaw_json.read_text())
-            gateway_token = data.get("gateway", {}).get("auth", {}).get("token")
-        except Exception:
-            pass
+    if token_file.exists():
+        gateway_token = token_file.read_text().strip() or None
 
         if gateway_token:
             lines += [
