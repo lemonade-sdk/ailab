@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from ailab.container import (
     AILAB_PROJECT,
     _client,
+    _container_home_dir,
     _container_name,
     _container_status,
     _current_user,
@@ -32,7 +33,6 @@ from ailab.container import (
     add_port,
     add_proxy_device,
     build_shell_welcome,
-    container_config_dir,
     container_exec,
     create_container,
     delete_container,
@@ -384,19 +384,9 @@ async def api_remove_port(name: str, device_name: str):
 
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
-def _read_gateway_token(cfg_dir: Path) -> str | None:
-    """Read the gateway shared token (used in the dashboard URL).
-
-    Checks our own ``gateway-token`` file first (written by the installer and
-    never touched by openclaw's own config management), then falls back to the
-    ``gateway.auth.token`` field in ``openclaw.json`` for backwards compat.
-    """
-    token_file = cfg_dir / "gateway-token"
-    if token_file.exists():
-        token = token_file.read_text().strip()
-        if token:
-            return token
-    openclaw_json = cfg_dir / "openclaw.json"
+def _read_gateway_token(openclaw_dir: Path) -> str | None:
+    """Read the gateway shared token from ~/.openclaw/openclaw.json."""
+    openclaw_json = openclaw_dir / "openclaw.json"
     if not openclaw_json.exists():
         return None
     try:
@@ -406,10 +396,10 @@ def _read_gateway_token(cfg_dir: Path) -> str | None:
         return None
 
 
-def _get_or_create_gateway_token(cfg_dir: Path) -> str:
+def _get_or_create_gateway_token(openclaw_dir: Path) -> str:
     """Return the existing gateway shared token from openclaw.json, or generate a new one."""
     import secrets as _secrets
-    token = _read_gateway_token(cfg_dir)
+    token = _read_gateway_token(openclaw_dir)
     if token:
         return token
     return _secrets.token_urlsafe(32)
@@ -420,8 +410,8 @@ async def api_gateway_url(name: str):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
     _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
-    cfg_dir = container_config_dir(name, home) / "openclaw"
-    token = _read_gateway_token(cfg_dir)
+    openclaw_dir = _container_home_dir(home, name) / ".openclaw"
+    token = _read_gateway_token(openclaw_dir)
     if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
     return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
@@ -436,22 +426,22 @@ async def api_gateway_pair(name: str):
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    cfg_dir = container_config_dir(name, home) / "openclaw"
+    openclaw_dir = _container_home_dir(home, name) / ".openclaw"
 
-    if not cfg_dir.exists():
+    if not openclaw_dir.exists():
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
     installer = OpenclawInstaller()
 
     def task():
-        gateway_token = _get_or_create_gateway_token(cfg_dir)
+        gateway_token = _get_or_create_gateway_token(openclaw_dir)
         print("Configuring gateway environment...")
-        installer._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
+        installer._configure_gateway_env(cname, uid, gid, home, gateway_token)
 
         # If openclaw is already onboarded (has device state), just restart the
         # gateway service with the refreshed env — no need to re-run onboard.
         already_onboarded = any(
-            (cfg_dir / d).exists()
+            (openclaw_dir / d).exists()
             for d in ("devices", "identity")
         )
         if already_onboarded:
@@ -459,10 +449,10 @@ async def api_gateway_pair(name: str):
             installer._restart_gateway(cname, uid, gid, home)
         else:
             print("Pairing gateway device (this takes ~10 seconds)...")
-            installer._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
-            installer._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
+            installer._run_onboard(cname, uid, gid, home, gateway_token)
+            installer._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
 
-        token = _read_gateway_token(cfg_dir)
+        token = _read_gateway_token(openclaw_dir)
         if token:
             print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")
         else:
