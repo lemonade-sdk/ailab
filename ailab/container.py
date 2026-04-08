@@ -95,6 +95,25 @@ def _user_info(username: str) -> tuple[str, int, int, str]:
     return pw.pw_name, pw.pw_uid, pw.pw_gid, pw.pw_dir
 
 
+def _chown(path: Path, uid: int, gid: int):
+    """Set ownership of path to uid:gid.
+
+    Tries os.chown first (fast, works as root without snap seccomp filtering),
+    then falls back to the chown binary (works when seccomp blocks the raw
+    syscall from Python), then chmod 0o777 as a last resort.
+    """
+    import subprocess
+    try:
+        os.chown(path, uid, gid)
+        return
+    except OSError:
+        pass
+    result = subprocess.run(["chown", f"{uid}:{gid}", str(path)], check=False)
+    if result.returncode == 0:
+        return
+    path.chmod(0o777)
+
+
 def list_system_users() -> list[dict]:
     """Return all /etc/passwd users with UID >= 1000 (excludes nobody)."""
     users = []
@@ -704,20 +723,12 @@ def create_container(
     # sees this subdirectory, not the full host home.
     container_home = _container_home_dir(home, name)
     container_home.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chown(container_home, uid, gid)
-    except OSError:
-        container_home.chmod(0o777)
+    _chown(container_home, uid, gid)
 
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    # Ensure the mapped user can write into the directory.  Prefer chown, but
-    # fall back to chmod 0o777 when running under snap (seccomp blocks chown).
-    try:
-        os.chown(cfg_dir, uid, gid)
-    except OSError:
-        cfg_dir.chmod(0o777)
+    _chown(cfg_dir, uid, gid)
 
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
