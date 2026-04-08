@@ -553,6 +553,22 @@ def _cloud_init_userdata(username: str, uid: int, gid: int, home: str) -> str:
         echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME"
         chmod 0440 "/etc/sudoers.d/$USERNAME"
 
+        # Populate home with skel dotfiles.
+        # --no-create-home skips /etc/skel copy; do it here as container root.
+        # The home dir is bind-mounted with mode 0777 (owned by host root, which
+        # appears as nobody inside the container and cannot be chowned), so we
+        # copy the files and chown them individually to give the user a
+        # proper shell environment.
+        for skel_file in /etc/skel/.bashrc /etc/skel/.profile /etc/skel/.bash_logout; do
+            fname=$(basename "$skel_file")
+            dest="$USER_HOME/$fname"
+            [ -f "$skel_file" ] || continue
+            [ -f "$dest" ] && continue
+            cp "$skel_file" "$dest"
+            chown "$USER_UID:$USER_GID" "$dest"
+            chmod 644 "$dest"
+        done
+
         loginctl enable-linger "$USERNAME" \
             || log "Warning: loginctl enable-linger failed (non-fatal)"
         systemctl start "user@${USER_UID}.service" \
