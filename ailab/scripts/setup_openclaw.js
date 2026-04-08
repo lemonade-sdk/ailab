@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // Writes an opinionated ~/.openclaw/openclaw.json that uses lemonade-server
-// via a custom "lemonade" provider that speaks the Ollama API on port 8000.
+// via a custom "lemonade" provider that speaks the OpenAI-compatible
+// completions API on port 8000.
 //
 // The openclaw config is intentionally limited to a single "lemonade"
 // provider so all cloud and alternate local providers are disabled.
@@ -12,78 +13,119 @@
 //
 // Adapted from ubuclaw/snap/local/bin/setup-providers.js.
 
-const http = require('http');
-const fs   = require('fs');
-const path = require('path');
-const os   = require('os');
+const { spawnSync } = require('child_process');
+const fs            = require('fs');
+const path          = require('path');
+const os            = require('os');
 
-// lemonade exposes an Ollama-compatible API at port 8000.
+// lemonade-server changed its default port from 8000 to 13305 in version 10.1.
+// Try the new port first; fall back to 8000 for older installations.
+const LEMONADE_PORTS = [13305, 8000];
+
+function detectLemonadePort() {
+  for (const port of LEMONADE_PORTS) {
+    const result = spawnSync('curl', [
+      '-fsS',
+      '--connect-timeout', '2',
+      '--max-time', '3',
+      `http://localhost:${port}/api/v1/models`,
+    ], { encoding: 'utf8', timeout: 4000 });
+    if (result.status === 0) {
+      return port;
+    }
+  }
+  // Neither port is reachable — default to the new port (>= 10.1).
+  return LEMONADE_PORTS[0];
+}
+
+const LEMONADE_PORT = detectLemonadePort();
 const LEMONADE = {
-  baseUrl: 'http://localhost:8000',
+  baseUrl: `http://localhost:${LEMONADE_PORT}/api/v1`,
   apiKey:  'lemonade',
-  api:     'ollama',
+  api:     'openai-completions',
 };
 
 const HOME        = os.homedir();
-// Honour per-container config paths set by the installer; fall back to defaults.
-const CONFIG_DIR  = process.env.OPENCLAW_STATE_DIR  || path.join(HOME, '.openclaw');
-const CONFIG_FILE = process.env.OPENCLAW_CONFIG_PATH || path.join(CONFIG_DIR, 'openclaw.json');
+const CONFIG_DIR  = path.join(HOME, '.openclaw');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'openclaw.json');
 const WORKSPACE   = path.join(HOME, 'workspace');
 
-// Preferred Qwen models in priority order (highest preference first).
+// Preferred models in priority order (highest preference first).
 const PREFERRED_MODELS = [
-  'Qwen3.5-27B-GGUF',
   'Qwen3.5-9B-GGUF',
   'Qwen3-8B-GGUF',
+  'Qwen3-4B-Instruct-2507-GGUF',
   'Qwen3.5-4B-GGUF',
   'Qwen3-4B-GGUF',
   'Qwen3.5-2B-GGUF',
   'Qwen3-1.7B-GGUF',
 ];
 
-const FALLBACK_MODEL = 'Qwen3.5-9B-GGUF';
+const FALLBACK_MODEL = 'Qwen3-4B-Instruct-2507-GGUF';
 
-function httpRequest(method, url, body) {
-  return new Promise((resolve, reject) => {
-    const data = body ? JSON.stringify(body) : null;
-    const options = {
-      method,
-      timeout: 5000,
-      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
-    };
-    const req = http.request(url, options, res => {
-      let body = '';
-      res.on('data', chunk => { body += chunk; });
-      res.on('end', () => {
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          return reject(new Error(`HTTP ${res.statusCode}`));
-        }
-        resolve(body);
-      });
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    if (data) {
-      req.write(data);
-    }
-    req.end();
+function runCurl(args) {
+  const result = spawnSync('curl', args, {
+    encoding: 'utf8',
+    timeout: 5000,
   });
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || '').trim();
+    throw new Error(stderr || `curl exited with status ${result.status}`);
+  }
+
+  return result.stdout;
 }
 
-// Probe lemonade's Ollama-compatible /api/tags endpoint.
-async function probeOllamaModels(baseUrl) {
+function probeDownloadedModels(baseUrl) {
   try {
-    const body = await httpRequest('GET', `${baseUrl}/api/tags`);
-    const data = JSON.parse(body).models || [];
-    return data.length > 0 ? data : null;
+    const body = runCurl([
+      '-fsS',
+      '--connect-timeout', '3',
+      '--max-time', '5',
+      `${baseUrl}/models`,
+    ]);
+    const data = JSON.parse(body);
+    const models = Array.isArray(data.data) ? data.data : [];
+    return models
+      .map(model => model.id || model.name)
+      .filter(Boolean);
   } catch {
     return null;
   }
 }
 
-async function pullLemonadeModel(baseUrl, modelName) {
+function pullLemonadeModel(baseUrl, modelName) {
   try {
-    await httpRequest('POST', `${baseUrl}/api/v1/pull`, { model_name: modelName });
+    runCurl([
+      '-fsS',
+      '--connect-timeout', '3',
+      '--max-time', '5',
+      '-X', 'POST',
+      '-H', 'Content-Type: application/json',
+      '-d', JSON.stringify({ model_name: modelName }),
+      `${baseUrl}/pull`,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadLemonadeModel(baseUrl, modelName) {
+  try {
+    runCurl([
+      '-fsS',
+      '--connect-timeout', '3',
+      '--max-time', '10',
+      '-X', 'POST',
+      '-H', 'Content-Type: application/json',
+      '-d', JSON.stringify({ model_name: modelName }),
+      `${baseUrl}/load`,
+    ]);
     return true;
   } catch {
     return false;
@@ -99,49 +141,69 @@ function choosePreferredModel(downloadedIds) {
   return null;
 }
 
+function sortModelsForConfig(modelIds) {
+  const preferredRank = new Map(PREFERRED_MODELS.map((id, index) => [id, index]));
+  return Array.from(new Set(modelIds)).sort((a, b) => {
+    const aRank = preferredRank.has(a) ? preferredRank.get(a) : Number.MAX_SAFE_INTEGER;
+    const bRank = preferredRank.has(b) ? preferredRank.get(b) : Number.MAX_SAFE_INTEGER;
+    if (aRank !== bRank) {
+      return aRank - bRank;
+    }
+    return a.localeCompare(b);
+  });
+}
+
 async function main() {
   console.log('ailab: configuring openclaw...');
 
-  // Probe lemonade via the Ollama API.
-  const rawModels = await probeOllamaModels(LEMONADE.baseUrl);
+  console.log(`ailab: lemonade-server port detected: ${LEMONADE_PORT}`);
+  const modelIds = probeDownloadedModels(LEMONADE.baseUrl);
+  const downloadedIds = new Set(modelIds || []);
 
-  let modelIds = [];
   let primaryModel = FALLBACK_MODEL;
 
-  if (rawModels) {
-    modelIds = rawModels
-      .map(m => m.name || m.id)
-      .filter(Boolean);
+  if (modelIds) {
     console.log(`ailab: lemonade found — ${modelIds.length} model(s): ${modelIds.join(', ')}`);
   } else {
     console.log('ailab: lemonade not reachable — pre-configuring with defaults');
     console.log('  (config will be ready once lemonade-server starts on the host)');
   }
 
-  const downloadedIds = new Set(modelIds);
   const preferredModel = choosePreferredModel(downloadedIds);
   if (preferredModel) {
     primaryModel = preferredModel;
   } else {
-    if (!downloadedIds.has(FALLBACK_MODEL)) {
-      const pullStarted = await pullLemonadeModel(LEMONADE.baseUrl, FALLBACK_MODEL);
+    if (modelIds !== null && !downloadedIds.has(FALLBACK_MODEL)) {
+      const pullStarted = pullLemonadeModel(LEMONADE.baseUrl, FALLBACK_MODEL);
       if (pullStarted) {
-        console.log(`ailab: requested lemonade download for fallback model ${FALLBACK_MODEL}`);
-      } else if (rawModels) {
+        console.log(`ailab: requested lemonade download for ${FALLBACK_MODEL}`);
+      } else {
         console.log(`ailab: could not request lemonade download for ${FALLBACK_MODEL}`);
       }
     }
     downloadedIds.add(FALLBACK_MODEL);
   }
 
-  const normModels = Array.from(downloadedIds).map(id => ({
+  // Tell lemonade to load the primary model so it is ready when the user
+  // opens openclaw for the first time.
+  if (modelIds !== null) {
+    console.log(`ailab: requesting lemonade load for ${primaryModel}...`);
+    const loaded = loadLemonadeModel(LEMONADE.baseUrl, primaryModel);
+    if (loaded) {
+      console.log(`ailab: lemonade model ${primaryModel} loaded`);
+    } else {
+      console.log(`ailab: lemonade load request failed for ${primaryModel} (non-fatal)`);
+    }
+  }
+
+  const normModels = sortModelsForConfig(downloadedIds).map(id => ({
     id,
     name:          id,
     reasoning:     false,
     input:         ['text'],
     cost:          { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32768,
-    maxTokens:     4096,
+    maxTokens:     8192,
   }));
 
   const config = {
@@ -180,7 +242,7 @@ async function main() {
   console.log(`  primary: lemonade/${primaryModel}`);
   console.log('');
   console.log('  Provider: lemonade only');
-  console.log('  Lemonade → localhost:8000 via Ollama API (proxied from host)');
+  console.log(`  Lemonade → localhost:${LEMONADE_PORT}/api/v1 via OpenAI-compatible completions API (proxied from host)`);
   console.log('  All non-lemonade providers disabled (models.mode: replace)');
   console.log('  Web UI → http://localhost:18789 (accessible on host)');
 }

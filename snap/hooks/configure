@@ -1,0 +1,25 @@
+#!/bin/bash
+# Called by snapd whenever 'snap set ailab ...' is used.
+# Validates web.host and web.port and restarts the web daemon.
+set -euo pipefail
+
+HOST=$(snapctl get web.host)
+PORT=$(snapctl get web.port)
+
+# Set defaults if values are empty
+if [ -z "$HOST" ]; then
+    snapctl set web.host=127.0.0.1
+fi
+
+if [ -z "$PORT" ]; then
+    snapctl set web.port=11500
+else
+    # Validate port is a number in the valid range
+    if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+        echo "web.port must be a number between 1 and 65535" >&2
+        exit 1
+    fi
+fi
+
+# Restart the web daemon to pick up the new settings
+snapctl restart ailab.web

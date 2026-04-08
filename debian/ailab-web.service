@@ -1,0 +1,12 @@
+[Unit]
+Description=AI Lab web management interface
+Documentation=https://github.com/kenvandine/ailab
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/ailab web
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

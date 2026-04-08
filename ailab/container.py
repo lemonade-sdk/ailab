@@ -1,129 +1,86 @@
-"""LXD container management for ailab."""
+"""LXD container management for ailab — via LXD REST API (pylxd)."""
 
-import importlib.resources
-import json
 import os
 import pwd
 import shutil
-import shlex
-import subprocess
+import socket
 import sys
+import textwrap
 import time
 from pathlib import Path
+
+import pylxd
+import pylxd.exceptions
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 AILAB_PROJECT = "ailab"
-BASE_IMAGE = "ubuntu-daily:devel"
+BASE_IMAGE_SERVER = "https://cloud-images.ubuntu.com/daily/"
+BASE_IMAGE_ALIAS = "devel"
 
 # Ports proxied INTO the container (container localhost → host service)
 # Apps in the container connect to these as if they're local, but they reach the host.
 INBOUND_PROXIES = [
-    ("lemonade", 8000),   # lemonade-server
-    ("ollama",   11434),  # ollama
+    ("lemonade",       8000),  # lemonade-server < 10.1
+    ("lemonade-13305", 13305), # lemonade-server >= 10.1
+    ("ollama",         11434), # ollama
 ]
 
-# Ports proxied FROM the container to the host (host browser → container service)
-# Web UIs running in the container are accessible on the host at the same port.
-OUTBOUND_PROXIES = [
-    ("web-3000",  3000),   # node/react dev servers
-    ("web-7860",  7860),   # gradio
-    ("web-8080",  8080),   # generic
-    ("web-8888",  8888),   # jupyter
-    ("web-8501",  8501),   # streamlit
-    ("web-9090",  9090),   # prometheus / generic
-]
+# Ports proxied FROM the container to the host (host browser → container service).
+# Kept empty — each installer adds only the ports its tool actually uses.
+OUTBOUND_PROXIES: list = []
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _user_has_group_membership(group_name: str) -> bool:
-    """Return True if getent reports that the current user is in the named group."""
-    username, _, gid, _ = _current_user()
-    result = subprocess.run(
-        ["getent", "group", group_name],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return False
+# ── API clients ───────────────────────────────────────────────────────────────
 
-    fields = result.stdout.strip().split(":", 3)
-    if len(fields) != 4:
-        return False
-
-    _, _, group_gid, members = fields
-    member_names = [m for m in members.split(",") if m]
-    return group_gid == str(gid) or username in member_names
+def _client() -> pylxd.Client:
+    """Return a pylxd Client scoped to the ailab project."""
+    return pylxd.Client(project=AILAB_PROJECT)
 
 
-def _process_has_group(group_name: str) -> bool:
-    """Return True if the current process already has the named group active."""
-    result = subprocess.run(
-        ["getent", "group", group_name],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        return False
-
-    fields = result.stdout.strip().split(":", 3)
-    if len(fields) != 4:
-        return False
-
-    group_gid = int(fields[2])
-    return group_gid in os.getgroups() or os.getgid() == group_gid
+def _admin_client() -> pylxd.Client:
+    """Return a pylxd Client for admin operations (project/profile management)."""
+    return pylxd.Client()
 
 
-def _wrap_with_lxd_group(args: list[str]) -> list[str]:
-    """Refresh lxd group membership for this command when needed.
+def _find_lxd_socket() -> str:
+    """Return the path to the LXD Unix socket."""
+    for path in [
+        "/var/snap/lxd/common/lxd/unix.socket",
+        "/var/lib/lxd/unix.socket",
+    ]:
+        if os.path.exists(path):
+            return path
+    raise FileNotFoundError("LXD Unix socket not found")
 
-    If the user has been added to the lxd group but the current shell hasn't
-    picked it up yet, run the command via `sg lxd -c ...` so lxc commands work
-    immediately without requiring logout/login or `newgrp` in the parent shell.
+
+def find_lxc() -> str:
+    """Return the absolute path to the lxc binary.
+
+    When running inside a snap, AppArmor blocks executing /snap/bin/lxc
+    (a snapd wrapper script).  Use the real binary from the lxd snap
+    directly, following the 'current' symlink to the versioned path.
+    Falls back to system paths and PATH for non-snap installs.
     """
-    if not args or args[0] != "lxc":
-        return args
-
-    if shutil.which("sg") is None:
-        return args
-
-    if _process_has_group("lxd") or not _user_has_group_membership("lxd"):
-        return args
-
-    return ["sg", "lxd", "-c", shlex.join(args)]
-
-def _run(args, *, check=True, capture=False, input=None):
-    """Run a command, returning CompletedProcess."""
-    kwargs = dict(check=check, text=True, input=input)
-    if capture:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.PIPE
-    return subprocess.run(_wrap_with_lxd_group(args), **kwargs)
+    # Prefer the real lxd snap binary (AppArmor-safe from inside another snap)
+    lxd_snap = "/snap/lxd/current/bin/lxc"
+    if os.path.isfile(lxd_snap) and os.access(lxd_snap, os.X_OK):
+        return lxd_snap
+    for candidate in ("/usr/bin/lxc", "/usr/local/bin/lxc"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which("lxc")
+    if found:
+        return found
+    return "lxc"  # last resort – let execvp/subprocess fail with a clear error
 
 
-def _lxc(*args, capture=False, check=True, input=None):
-    """Run an lxc command scoped to the ailab project."""
-    return _run(["lxc", "--project", AILAB_PROJECT, *args],
-                capture=capture, check=check, input=input)
-
-
-def _lxc_admin(*args, capture=False, check=True, input=None):
-    """Run an lxc command outside of any project (for project management)."""
-    return _run(["lxc", *args], capture=capture, check=check, input=input)
-
+# ── User helpers ──────────────────────────────────────────────────────────────
 
 def _container_name(name: str) -> str:
     """Return the container name as-is; the LXD project provides isolation."""
     return name
-
-
-def _short_name(cname: str) -> str:
-    return cname
 
 
 def _current_user():
@@ -133,126 +90,94 @@ def _current_user():
     return pw.pw_name, uid, gid, pw.pw_dir
 
 
-def _yaml_scalar(value) -> str:
-    """Render a scalar value safely for the simple YAML we emit to lxc."""
-    return json.dumps(str(value))
+def _user_info(username: str) -> tuple[str, int, int, str]:
+    """Return (username, uid, gid, home) for the given username."""
+    pw = pwd.getpwnam(username)
+    return pw.pw_name, pw.pw_uid, pw.pw_gid, pw.pw_dir
 
 
-def _profile_yaml(config: dict[str, str], devices: dict[str, dict[str, str]]) -> str:
-    """Render a minimal LXD profile document."""
-    lines = ["config:"]
-    for key, value in config.items():
-        lines.append(f"  {key}: {_yaml_scalar(value)}")
+def _chown(path: Path, uid: int, gid: int):
+    """Set ownership of path to uid:gid.
 
-    lines.extend([
-        "description: ailab profile",
-        "devices:",
-    ])
-
-    for dev_name, attrs in devices.items():
-        lines.append(f"  {dev_name}:")
-        for key, value in attrs.items():
-            lines.append(f"    {key}: {_yaml_scalar(value)}")
-
-    return "\n".join(lines) + "\n"
-
-
-def _default_profile_devices() -> dict[str, dict[str, str]]:
-    """Return root/nic devices from the host's default LXD profile."""
-    fallback = {
-        "eth0": {"name": "eth0", "network": "lxdbr0", "type": "nic"},
-        "root": {"path": "/", "pool": "default", "type": "disk"},
-    }
-
-    result = _lxc_admin("profile", "show", "default", "--format=json", capture=True, check=False)
-    if result.returncode != 0:
-        return fallback
-
+    Tries os.chown first (fast, works as root without snap seccomp filtering),
+    then falls back to the chown binary (works when seccomp blocks the raw
+    syscall from Python), then chmod 0o777 as a last resort.
+    """
+    import subprocess
     try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return fallback
-
-    devices = data.get("devices", {})
-
-    selected = {}
-    if "eth0" in devices:
-        selected["eth0"] = {str(k): str(v) for k, v in devices["eth0"].items()}
-    if "root" in devices:
-        selected["root"] = {str(k): str(v) for k, v in devices["root"].items()}
-
-    if "eth0" not in selected:
-        selected["eth0"] = fallback["eth0"]
-    if "root" not in selected:
-        selected["root"] = fallback["root"]
-
-    return selected
+        os.chown(path, uid, gid)
+        return
+    except OSError:
+        pass
+    result = subprocess.run(
+        ["chown", f"{uid}:{gid}", str(path)],
+        check=False, stderr=subprocess.DEVNULL,
+    )
+    if result.returncode == 0:
+        return
+    path.chmod(0o777)
 
 
-def container_config_dir(name: str, home: str) -> Path:
-    """Per-container config directory on the host (also accessible inside the
-    container at the same path, because the home dir is bind-mounted)."""
-    return Path(home) / ".local" / "share" / "ailab" / "containers" / name
+def list_system_users() -> list[dict]:
+    """Return all /etc/passwd users with UID >= 1000 (excludes nobody)."""
+    users = []
+    for pw in pwd.getpwall():
+        if pw.pw_uid >= 1000 and pw.pw_uid < 65534:
+            users.append({
+                "username": pw.pw_name,
+                "uid": pw.pw_uid,
+                "home": pw.pw_dir,
+            })
+    return sorted(users, key=lambda u: u["uid"])
 
 
-def push_file(cname: str, remote_path: str, content: bytes | str):
-    """Write content to a file inside the container via lxc exec stdin.
+def get_container_user(cname: str) -> tuple[str, int, int, str]:
+    """Return (username, uid, gid, home) for the user mapped into a container.
 
-    Unlike 'lxc file push', this works on tmpfs mounts (e.g. /tmp).
+    Reads 'user.ailab-mapped-user' from the LXD instance config, which is
+    stored at creation time.  Falls back to the current process user for
+    backward compatibility with containers created before this feature.
     """
-    if isinstance(content, bytes):
-        content = content.decode()
-    _lxc("exec", cname, "--", "bash", "-c",
-         f"rm -f {remote_path} && cat > {remote_path}", input=content)
+    try:
+        instance = _client().instances.get(cname)
+        mapped = instance.config.get("user.ailab-mapped-user")
+        if mapped:
+            return _user_info(mapped)
+    except Exception:
+        pass
+    return _current_user()
 
 
-def set_container_env(cname: str, env: dict[str, str], profile_name: str | None = None):
-    """Persist environment variables in the container.
+# ── Instance helpers ──────────────────────────────────────────────────────────
 
-    Sets them via both LXD config (available to lxc exec calls) and a
-    /etc/profile.d/ script (survives PAM re-initialization in login shells).
-
-    profile_name: base name for the profile.d file, e.g. "openclaw" →
-                  /etc/profile.d/ailab-openclaw.sh
-                  Defaults to "container" if not given.
-    """
-    for key, value in env.items():
-        _lxc("config", "set", cname, f"environment.{key}", value)
-
-    tag = profile_name or "container"
-    lines = [f"# ailab: {tag} environment (auto-generated)"]
-    for key, value in env.items():
-        lines.append(f'export {key}="{value}"')
-    script = "\n".join(lines) + "\n"
-    dest = f"/etc/profile.d/ailab-{tag}.sh"
-    _lxc("exec", cname, "--",
-         "bash", "-c", f"cat > {dest} && chmod 644 {dest}",
-         input=script)
+def _get_instance(cname: str):
+    """Return the named Instance, raising RuntimeError if not found."""
+    try:
+        return _client().instances.get(cname)
+    except pylxd.exceptions.NotFound:
+        raise RuntimeError(f"Container '{cname}' not found.")
 
 
 def _container_status(cname: str) -> str:
     """Return container status string or 'missing'."""
-    result = _lxc("list", cname, "--format=json", capture=True, check=False)
-    if result.returncode != 0:
+    try:
+        return _client().instances.get(cname).status.lower()
+    except pylxd.exceptions.NotFound:
         return "missing"
-    data = json.loads(result.stdout)
-    if not data:
-        return "missing"
-    return data[0].get("status", "unknown").lower()
 
 
 def _wait_for_network(cname: str, timeout: int = 60):
     """Wait until the container has an IPv4 address."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        result = _lxc("list", cname, "--format=json", capture=True, check=False)
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data:
-                for net in data[0].get("state", {}).get("network", {}).values():
-                    for addr in net.get("addresses", []):
-                        if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                            return
+        try:
+            state = _get_instance(cname).state()
+            for iface in (state.network or {}).values():
+                for addr in iface.get("addresses", []):
+                    if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                        return
+        except (RuntimeError, pylxd.exceptions.LXDAPIException):
+            pass
         time.sleep(2)
     raise TimeoutError(f"Container {cname} did not get a network address within {timeout}s")
 
@@ -261,89 +186,599 @@ def _wait_for_ready(cname: str, timeout: int = 30):
     """Wait until we can exec a command in the container."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        result = _lxc("exec", cname, "--", "true", capture=True, check=False)
-        if result.returncode == 0:
-            return
+        try:
+            result = _get_instance(cname).execute(["true"])
+            if result.exit_code == 0:
+                return
+        except Exception:
+            pass
         time.sleep(2)
     raise TimeoutError(f"Container {cname} not ready after {timeout}s")
+
+
+def _host_port_in_use(port: int) -> bool:
+    """Return True if a TCP port is already bound on the host."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
+def _partition_conflicting_proxies(
+    devices: dict,
+) -> tuple[dict, dict]:
+    """Split devices into (conflicting_outbound_proxies, rest).
+
+    conflicting: outbound proxy devices whose host listen port is already in use.
+    rest: all other devices (safe to apply before starting).
+    """
+    conflicting: dict = {}
+    rest: dict = {}
+    for name, cfg in devices.items():
+        if (
+            cfg.get("type") == "proxy"
+            and cfg.get("bind", "host") == "host"
+            and ":" in cfg.get("listen", "")
+        ):
+            try:
+                port = int(cfg["listen"].rsplit(":", 1)[-1])
+                if _host_port_in_use(port):
+                    conflicting[name] = cfg
+                    continue
+            except ValueError:
+                pass
+        rest[name] = cfg
+    return conflicting, rest
+
+
+# ── Default profile devices ───────────────────────────────────────────────────
+
+def _default_profile_devices() -> dict[str, dict[str, str]]:
+    """Return root/nic devices from the host's default LXD profile."""
+    fallback = {
+        "eth0": {"name": "eth0", "network": "lxdbr0", "type": "nic"},
+        "root": {"path": "/", "pool": "default", "type": "disk"},
+    }
+    try:
+        devices = _admin_client().profiles.get("default").devices
+        selected = {}
+        if "eth0" in devices:
+            selected["eth0"] = {str(k): str(v) for k, v in devices["eth0"].items()}
+        if "root" in devices:
+            selected["root"] = {str(k): str(v) for k, v in devices["root"].items()}
+        selected.setdefault("eth0", fallback["eth0"])
+        selected.setdefault("root", fallback["root"])
+        return selected
+    except Exception:
+        return fallback
+
+
+# ── Config dir ────────────────────────────────────────────────────────────────
+
+def _ailab_data_root() -> Path:
+    """Base directory for ailab's persistent data.
+
+    When running as a snap, use SNAP_COMMON (/var/snap/ailab/common) which is
+    always accessible to the snap daemon regardless of which user it runs as.
+    Falls back to the standard XDG location for non-snap installs.
+    """
+    snap_common = os.environ.get("SNAP_COMMON")
+    if snap_common:
+        return Path(snap_common)
+    if xdg := os.environ.get("XDG_DATA_HOME"):
+        return Path(xdg) / "ailab"
+    return Path.home() / ".local" / "share" / "ailab"
+
+
+def _container_home_dir(home: str, name: str) -> Path:
+    """Host-side isolated home directory for a container.
+
+    Snap:     SNAP_COMMON/homes/{username}/{name} — the snap daemon has
+              unconditional write access here; AppArmor's ``owner`` qualifier
+              on the ``home`` interface blocks writes to the real user home
+              even when running as root.
+    Non-snap: $HOME/ailab/{name} — accessible directly from the user's home.
+
+    In both cases the directory is bind-mounted as the container user's home
+    path inside the container, so the container only sees this isolated dir.
+    """
+    if os.environ.get("SNAP_COMMON"):
+        username = Path(home).name
+        return _ailab_data_root() / "homes" / username / name
+    return Path(home) / "ailab" / name
+
+
+def container_config_dir(name: str, home: str) -> Path:
+    """Per-container config directory on the host.
+
+    Snap:     under SNAP_COMMON/containers/{username}/{name}.  The directory
+              is chowned to the mapped user and gets its own LXD disk device
+              so it's accessible inside the container at the same path.
+    Non-snap: inside the container's isolated home directory ($HOME/ailab/{name}).
+              No extra device needed — it's already in the home bind-mount.
+    """
+    if os.environ.get("SNAP_COMMON"):
+        username = Path(home).name
+        return _ailab_data_root() / "containers" / username / name
+    return _container_home_dir(home, name)
+
+
+def build_shell_welcome(container_name: str) -> str:
+    """Build a contextual SHELL_WELCOME message based on installed tools."""
+    cname = _container_name(container_name)
+    _, _, _, home = get_container_user(cname)
+    # Token lives in the host-side config dir (created by the installer with
+    # host ownership), not inside the container's subuid-owned home.
+    token_file = container_config_dir(container_name, home) / "openclaw" / "gateway-token"
+
+    lines = ["Welcome to your AI Lab container!\n"]
+
+    if token_file.exists():
+        gateway_token = token_file.read_text().strip() or None
+
+        if gateway_token:
+            lines += [
+                "openclaw is ready — launch the AI assistant:",
+                "  openclaw",
+                "",
+                "  Opens the TUI to chat with your local LLM.",
+                f"  The gateway web UI is available at http://localhost:18789/#token={gateway_token}",
+            ]
+        else:
+            lines += [
+                "openclaw is installed but needs to be set up.",
+                "Run the setup wizard:",
+                "  openclaw onboard",
+                "",
+                "  This connects openclaw to your local LLM (lemonade/ollama).",
+                "  After onboarding, launch the TUI with:  openclaw",
+            ]
+    else:
+        lines += [
+            "No AI tools are installed yet.",
+            "From the host, install a tool into this container:",
+            "  ailab install openclaw " + container_name,
+        ]
+
+    return "\n".join(lines)
+
+
+# ── File push ─────────────────────────────────────────────────────────────────
+
+def push_file(cname: str, remote_path: str, content: bytes | str):
+    """Write content to a file inside the container via the LXD files API."""
+    if isinstance(content, str):
+        content = content.encode()
+    _get_instance(cname).files.put(remote_path, content)
+
+
+# ── Environment variables ─────────────────────────────────────────────────────
+
+def set_container_env(cname: str, env: dict[str, str], profile_name: str | None = None):
+    """Persist environment variables in the container.
+
+    Sets them via both LXD config (available to exec calls) and a
+    /etc/profile.d/ script (survives PAM re-initialization in login shells).
+    """
+    instance = _get_instance(cname)
+    for key, value in env.items():
+        instance.config[f"environment.{key}"] = value
+    instance.save(wait=True)
+
+    tag = profile_name or "container"
+    lines = [f"# ailab: {tag} environment (auto-generated)"]
+    for key, value in env.items():
+        lines.append(f'export {key}="{value}"')
+    script = "\n".join(lines) + "\n"
+    instance.files.put(f"/etc/profile.d/ailab-{tag}.sh", script.encode())
+
+
+# ── Public exec API (used by installers) ─────────────────────────────────────
+
+def container_exec(
+    cname: str,
+    cmd: list[str],
+    *,
+    uid: int | None = None,
+    gid: int | None = None,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    stdin: bytes | str | None = None,
+    check: bool = True,
+    stream: bool = False,
+) -> tuple[int, str, str]:
+    """Execute a command in a container. Returns (exit_code, stdout, stderr).
+
+    stream: if True, print stdout/stderr to the terminal in real-time.
+    check:  if True, raise RuntimeError on non-zero exit code.
+    """
+    instance = _get_instance(cname)
+
+    kwargs: dict = {}
+    if uid is not None:
+        kwargs["user"] = uid
+    if gid is not None:
+        kwargs["group"] = gid
+    if cwd is not None:
+        kwargs["cwd"] = cwd
+    if env:
+        kwargs["environment"] = env
+    if stdin is not None:
+        kwargs["stdin_payload"] = stdin.encode() if isinstance(stdin, str) else stdin
+    if stream:
+        kwargs["stdout_handler"] = lambda s: print(s, end="", flush=True)
+        kwargs["stderr_handler"] = lambda s: print(s, end="", file=sys.stderr, flush=True)
+
+    result = instance.execute(cmd, **kwargs)
+
+    if check and result.exit_code != 0:
+        raise RuntimeError(
+            f"Command {cmd!r} in '{cname}' failed (exit {result.exit_code}):\n"
+            f"{result.stderr or ''}"
+        )
+    return result.exit_code, result.stdout or "", result.stderr or ""
+
+
+# ── Public device API (used by installers) ───────────────────────────────────
+
+def has_device(cname: str, device_name: str) -> bool:
+    """Return True if the container has a device with the given name."""
+    try:
+        return device_name in _get_instance(cname).expanded_devices
+    except RuntimeError:
+        return False
+
+
+def add_proxy_device(
+    cname: str,
+    device_name: str,
+    listen: str,
+    connect: str,
+    bind: str = "host",
+) -> bool:
+    """Add a proxy device to the container. Returns False if port already in use."""
+    instance = _get_instance(cname)
+    if device_name in instance.expanded_devices:
+        return True
+    instance.devices[device_name] = {
+        "type": "proxy",
+        "listen": listen,
+        "connect": connect,
+        "bind": bind,
+    }
+    try:
+        instance.save(wait=True)
+        return True
+    except pylxd.exceptions.LXDAPIException as e:
+        msg = str(e).lower()
+        if "already in use" in msg or "address already" in msg:
+            return False
+        raise
+
+
+def remove_proxy_device(cname: str, device_name: str):
+    """Remove a proxy device from the container."""
+    instance = _get_instance(cname)
+    if device_name in instance.devices:
+        del instance.devices[device_name]
+        instance.save(wait=True)
+
+
+# ── Start container (used by installers) ─────────────────────────────────────
+
+def start_container(cname: str):
+    """Start a stopped container and wait until it is ready.
+
+    Proxy devices whose host port is already bound by another process are
+    temporarily removed before starting and restored afterwards so that the
+    container can still start even when another container holds a shared port.
+    """
+    instance = _get_instance(cname)
+    conflicting, safe_devices = _partition_conflicting_proxies(instance.devices or {})
+
+    if conflicting:
+        names = ", ".join(sorted(conflicting))
+        print(f"Warning: host ports already in use — skipping proxy device(s): {names}")
+        instance.devices = safe_devices
+        instance.save(wait=True)
+
+    try:
+        instance.start(wait=True)
+    except pylxd.exceptions.LXDAPIException:
+        if conflicting:
+            # Restore removed devices even on failure
+            instance = _get_instance(cname)
+            instance.devices = {**instance.devices, **conflicting}
+            instance.save(wait=True)
+        raise
+
+    _wait_for_ready(cname)
+
+    if conflicting:
+        # Restore the proxy devices so they work when the port is freed later
+        instance = _get_instance(cname)
+        instance.devices = {**instance.devices, **conflicting}
+        instance.save(wait=True)
+
+
+# ── Cloud-init user-data ──────────────────────────────────────────────────────
+
+def _cloud_init_userdata(username: str, uid: int, gid: int, home: str) -> str:
+    """Generate cloud-init user-data YAML for container provisioning.
+
+    Replaces container_init.sh: installs base packages, Node.js, sets up
+    the user account, and writes /etc/profile.d/ailab.sh.
+    """
+    # Interpolated via .replace() to avoid f-string collisions with shell ${...}
+    user_setup = textwrap.dedent("""\
+        #!/bin/bash
+        set -euo pipefail
+        USERNAME="__USERNAME__"
+        USER_UID=__UID__
+        USER_GID=__GID__
+        USER_HOME="__HOME__"
+
+        log() { echo "[ailab] $*"; }
+
+        log "Setting up user $USERNAME (uid=$USER_UID, gid=$USER_GID)"
+
+        EXISTING_GROUP=$(getent group "$USER_GID" | cut -d: -f1 || true)
+        if [ -n "${EXISTING_GROUP:-}" ] && [ "$EXISTING_GROUP" != "$USERNAME" ]; then
+            log "Renaming group '$EXISTING_GROUP' -> '$USERNAME'"
+            groupmod -n "$USERNAME" "$EXISTING_GROUP"
+        elif [ -z "${EXISTING_GROUP:-}" ]; then
+            groupadd -g "$USER_GID" "$USERNAME"
+        fi
+
+        EXISTING_USER=$(getent passwd "$USER_UID" | cut -d: -f1 || true)
+        if [ -n "${EXISTING_USER:-}" ] && [ "$EXISTING_USER" != "$USERNAME" ]; then
+            log "Renaming user '$EXISTING_USER' -> '$USERNAME'"
+            # Kill any processes still running as the old user (cloud-init may
+            # leave a session behind) so usermod doesn't fail with "user in use"
+            loginctl terminate-user "$EXISTING_USER" 2>/dev/null || true
+            pkill -u "$EXISTING_USER" -9 2>/dev/null || true
+            sleep 0.5
+            usermod -l "$USERNAME" -d "$USER_HOME" -s /bin/bash "$EXISTING_USER" \
+                || log "Warning: user rename failed (non-fatal, uid=$USER_UID still valid)"
+        elif [ -z "${EXISTING_USER:-}" ]; then
+            useradd --uid "$USER_UID" --gid "$USER_GID" --shell /bin/bash \
+                    --no-create-home --home-dir "$USER_HOME" "$USERNAME"
+        fi
+
+        echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME"
+        chmod 0440 "/etc/sudoers.d/$USERNAME"
+
+        # Populate home with skel dotfiles.
+        # --no-create-home skips /etc/skel copy; do it here as container root.
+        # The home dir is bind-mounted with mode 0777 (owned by host root, which
+        # appears as nobody inside the container and cannot be chowned), so we
+        # copy the files and chown them individually to give the user a
+        # proper shell environment.
+        for skel_file in /etc/skel/.bashrc /etc/skel/.profile /etc/skel/.bash_logout; do
+            fname=$(basename "$skel_file")
+            dest="$USER_HOME/$fname"
+            [ -f "$skel_file" ] || continue
+            [ -f "$dest" ] && continue
+            cp "$skel_file" "$dest"
+            chown "$USER_UID:$USER_GID" "$dest"
+            chmod 644 "$dest"
+        done
+
+        # Disable slow MOTD scripts that fetch from the network or run
+        # apt checks — they can stall a login shell for minutes when the
+        # container's DNS/network is slow or the apt cache is cold.
+        for f in /etc/update-motd.d/50-motd-news \
+                 /etc/update-motd.d/90-updates-available \
+                 /etc/update-motd.d/91-release-upgrade \
+                 /etc/update-motd.d/95-hwe-eol; do
+            [ -f "$f" ] && chmod -x "$f"
+        done
+
+        loginctl enable-linger "$USERNAME" \
+            || log "Warning: loginctl enable-linger failed (non-fatal)"
+        systemctl start "user@${USER_UID}.service" \
+            || log "Warning: could not start user session (non-fatal)"
+
+        sudo -u "$USERNAME" bash -c 'curl -fsSL https://bun.sh/install | bash' \
+            || log "Warning: Bun install failed (non-fatal)"
+
+        sudo -u "$USERNAME" bash -c \
+            'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' \
+            || log "Warning: Homebrew install failed (non-fatal)"
+
+        log "User setup complete."
+        """).replace("__USERNAME__", username) \
+            .replace("__UID__", str(uid)) \
+            .replace("__GID__", str(gid)) \
+            .replace("__HOME__", home)
+
+    profile_sh = textwrap.dedent("""\
+        # ailab environment
+        export LANG=en_US.UTF-8
+        export LC_ALL=en_US.UTF-8
+
+        # Homebrew
+        if [ -d "/home/linuxbrew/.linuxbrew" ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+        fi
+
+        # Bun
+        if [ -d "$HOME/.bun" ]; then
+            export BUN_INSTALL="$HOME/.bun"
+            export PATH="$BUN_INSTALL/bin:$PATH"
+        fi
+
+        # pipx
+        export PATH="$PATH:$HOME/.local/bin"
+
+        # bash completion
+        if [ -n "${BASH_VERSION:-}" ] && [ -r /usr/share/bash-completion/bash_completion ]; then
+            . /usr/share/bash-completion/bash_completion
+        fi
+        """)
+
+    def _indent(text: str, spaces: int = 6) -> str:
+        return textwrap.indent(text, " " * spaces)
+
+    return (
+        "#cloud-config\n"
+        "\n"
+        "locale: en_US.UTF-8\n"
+        "\n"
+        # Disable ssh_authkey_fingerprints: it fails in LXD containers because
+        # SSH host keys aren't generated yet when the module runs.
+        "no_ssh_fingerprints: true\n"
+        "\n"
+        "package_update: true\n"
+        "package_upgrade: false\n"
+        "\n"
+        "packages:\n"
+        "  - python3\n"
+        "  - python3-venv\n"
+        "  - python3-pip\n"
+        "  - python3-dev\n"
+        "  - pipx\n"
+        "  - git\n"
+        "  - curl\n"
+        "  - wget\n"
+        "  - build-essential\n"
+        "  - ca-certificates\n"
+        "  - gnupg\n"
+        "  - sudo\n"
+        "  - bash-completion\n"
+        "  - locales\n"
+        "  - unzip\n"
+        "  - zip\n"
+        "  - jq\n"
+        "  - htop\n"
+        "  - vim\n"
+        "  - nano\n"
+        "  - file\n"
+        "  - lsb-release\n"
+        "  - xdg-utils\n"
+        "  - socat\n"
+        "  - netcat-openbsd\n"
+        "  - dbus-user-session\n"
+        "  - systemd-container\n"
+        "\n"
+        "write_files:\n"
+        "  - path: /tmp/ailab-setup-user.sh\n"
+        "    permissions: '0755'\n"
+        "    content: |\n"
+        f"{_indent(user_setup)}"
+        "  - path: /etc/profile.d/ailab.sh\n"
+        "    permissions: '0644'\n"
+        "    content: |\n"
+        f"{_indent(profile_sh)}"
+        "\n"
+        "runcmd:\n"
+        "  - [bash, -c, 'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -']\n"
+        "  - [apt-get, install, -y, -q, nodejs]\n"
+        "  - [npm, install, -g, npm@latest]\n"
+        "  - [bash, /tmp/ailab-setup-user.sh]\n"
+    )
 
 
 # ── Project and profile setup ─────────────────────────────────────────────────
 
 def ensure_ailab_project():
     """Create the ailab LXD project and profile if they don't exist."""
-    result = _lxc_admin("project", "show", AILAB_PROJECT, capture=True, check=False)
-    if result.returncode != 0:
+    admin = _admin_client()
+    client = _client()
+
+    try:
+        admin.projects.get(AILAB_PROJECT)
+    except pylxd.exceptions.NotFound:
         print(f"Creating LXD project '{AILAB_PROJECT}'...")
-        # features.images=false: share images with default project (avoids re-downloading)
-        _lxc_admin("project", "create", AILAB_PROJECT,
-                   "--config", "features.images=false")
+        admin.projects.create({
+            "name": AILAB_PROJECT,
+            "config": {"features.images": "false"},
+        })
 
-    result = _lxc("profile", "show", AILAB_PROJECT, capture=True, check=False)
-    if result.returncode != 0:
+    profile_config = {"security.nesting": "true"}
+    devices = _default_profile_devices()
+
+    try:
+        profile = client.profiles.get(AILAB_PROJECT)
+        profile.config = profile_config
+        profile.devices = devices
+        profile.save()
+    except pylxd.exceptions.NotFound:
         print(f"Creating LXD profile '{AILAB_PROJECT}'...")
-        _lxc("profile", "create", AILAB_PROJECT)
-
-    profile_yaml = _profile_yaml(
-        {"security.nesting": "true"},
-        _default_profile_devices(),
-    )
-    _lxc("profile", "edit", AILAB_PROJECT, input=profile_yaml)
+        client.profiles.create({
+            "name": AILAB_PROJECT,
+            "config": profile_config,
+            "devices": devices,
+        })
 
 
 # ── Container creation ────────────────────────────────────────────────────────
 
-def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | None = None):
-    """
-    Create and fully configure a new ailab container.
+def create_container(
+    name: str,
+    extra_outbound_ports: list[tuple[int, int]] | None = None,
+    username: str | None = None,
+):
+    """Create and fully configure a new ailab container.
 
     extra_outbound_ports: list of (host_port, container_port) tuples to add
                           in addition to the defaults.
+    username: the host user to map into the container; defaults to the
+              current user.  Useful when the server runs as root (e.g. snap).
     """
     cname = _container_name(name)
-    username, uid, gid, home = _current_user()
+    if username:
+        username, uid, gid, home = _user_info(username)
+    else:
+        username, uid, gid, home = _current_user()
 
-    status = _container_status(cname)
-    if status != "missing":
+    if _container_status(cname) != "missing":
+        status = _container_status(cname)
         print(f"Container '{name}' already exists (status: {status}).")
         sys.exit(1)
 
     ensure_ailab_project()
 
-    # ── Launch ────────────────────────────────────────────────────────────────
-    print(f"Launching container '{cname}' from {BASE_IMAGE}...")
-    _lxc("launch", BASE_IMAGE, cname, f"--profile={AILAB_PROJECT}")
+    # Create the isolated container home directory on the host.
+    # This is bind-mounted as the container user's home so the container only
+    # sees this subdirectory, not the full host home.
+    container_home = _container_home_dir(home, name)
+    container_home.mkdir(parents=True, exist_ok=True)
+    _chown(container_home, uid, gid)
 
-    # ── UID/GID passthrough so mounted homedir works ──────────────────────────
-    print("Configuring UID/GID mapping...")
-    idmap = f"uid {uid} {uid}\ngid {gid} {gid}"
-    _lxc("config", "set", cname, "raw.idmap", idmap)
-
-    # security.nesting allows docker/fuse inside the container
-    _lxc("config", "set", cname, "security.nesting", "true")
-
-    # ── Mount home directory ──────────────────────────────────────────────────
-    print(f"Mounting home directory {home}...")
-    _lxc("config", "device", "add", cname, "homedir", "disk",
-         f"source={home}", f"path={home}")
-
-    # ── Per-container config directory ────────────────────────────────────────
-    # Lives inside the already-mounted home dir, so no extra mount is needed.
+    # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    set_container_env(cname, {"AILAB_CONFIG_DIR": str(cfg_dir)},
-                      profile_name="base")
+    _chown(cfg_dir, uid, gid)
 
-    # ── Inbound proxies: container localhost → host service ───────────────────
-    print("Adding inbound port proxies (container → host services)...")
+    # ── Build devices dict ────────────────────────────────────────────────────
+    devices: dict[str, dict] = {}
+
+    # Home directory bind-mount: isolated $HOME/ailab/{name} → container home
+    devices["homedir"] = {"type": "disk", "source": str(container_home), "path": home}
+
+    # When running as snap, cfg_dir lives under SNAP_COMMON (outside the
+    # container home), so it needs its own bind-mount inside the container.
+    if not str(cfg_dir).startswith(str(container_home)):
+        devices["ailab-config"] = {
+            "type": "disk",
+            "source": str(cfg_dir),
+            "path": str(cfg_dir),
+        }
+
+    # Inbound proxies: container localhost → host service
     for dev_name, port in INBOUND_PROXIES:
-        _lxc("config", "device", "add", cname, f"proxy-in-{dev_name}", "proxy",
-             f"listen=tcp:127.0.0.1:{port}",
-             f"connect=tcp:127.0.0.1:{port}",
-             "bind=container")
+        devices[f"proxy-in-{dev_name}"] = {
+            "type": "proxy",
+            "listen": f"tcp:127.0.0.1:{port}",
+            "connect": f"tcp:127.0.0.1:{port}",
+            "bind": "container",
+        }
 
-    # ── Outbound proxies: host → container service ────────────────────────────
-    print("Adding outbound port proxies (container services → host browser)...")
+    # Outbound proxies: host → container web UIs
     all_outbound = list(OUTBOUND_PROXIES)
     if extra_outbound_ports:
         for hp, cp in extra_outbound_ports:
@@ -355,49 +790,92 @@ def create_container(name: str, extra_outbound_ports: list[tuple[int, int]] | No
             host_port, container_port = port, port
         else:
             dev_name, host_port, container_port = entry
+        devices[f"proxy-out-{dev_name}"] = {
+            "type": "proxy",
+            "listen": f"tcp:127.0.0.1:{host_port}",
+            "connect": f"tcp:127.0.0.1:{container_port}",
+            "bind": "host",
+        }
 
-        result = _lxc("config", "device", "add", cname, f"proxy-out-{dev_name}", "proxy",
-                       f"listen=tcp:127.0.0.1:{host_port}",
-                       f"connect=tcp:127.0.0.1:{container_port}",
-                       "bind=host", check=False)
-        if result.returncode != 0:
-            print(f"  Warning: skipping port {host_port} (already in use on host)")
+    # ── Build instance config ─────────────────────────────────────────────────
+    idmap = f"uid {uid} {uid}\ngid {gid} {gid}"
+    config = {
+        "name": cname,
+        "source": {
+            "type": "image",
+            "protocol": "simplestreams",
+            "server": BASE_IMAGE_SERVER,
+            "alias": BASE_IMAGE_ALIAS,
+        },
+        "profiles": [AILAB_PROJECT],
+        "config": {
+            "raw.idmap": idmap,
+            "security.nesting": "true",
+            "user.user-data": _cloud_init_userdata(username, uid, gid, home),
+            "environment.AILAB_CONFIG_DIR": str(cfg_dir),
+            "user.ailab-mapped-user": username,
+        },
+        "devices": devices,
+    }
 
-    # ── Restart to apply idmap + devices ─────────────────────────────────────
-    print("Restarting container to apply configuration...")
-    _lxc("restart", cname)
+    # ── Create and start ──────────────────────────────────────────────────────
+    print(f"Creating container '{cname}' from {BASE_IMAGE_ALIAS} ({BASE_IMAGE_SERVER})...")
+    client = _client()
 
-    print("Waiting for container to be ready...")
-    _wait_for_ready(cname)
+    # Remove any proxy devices that conflict with in-use ports (best-effort)
+    safe_devices = {}
+    for dev_name, dev_cfg in devices.items():
+        if dev_cfg.get("type") == "proxy" and dev_cfg.get("bind") == "host":
+            safe_devices[dev_name] = dev_cfg
+        else:
+            safe_devices[dev_name] = dev_cfg
+    config["devices"] = safe_devices
+
+    instance = client.instances.create(config, wait=True)
+    print(f"Starting container '{cname}'...")
+    instance.start(wait=True)
+
+    print("Waiting for network...")
     _wait_for_network(cname)
 
-    # ── Run init script inside container ─────────────────────────────────────
-    _run_init_script(cname, username, uid, gid, home)
+    # ── Wait for cloud-init to complete ───────────────────────────────────────
+    print("Running container initialization via cloud-init (this may take a few minutes)...")
+    instance = _get_instance(cname)
+    instance.execute(
+        ["cloud-init", "status", "--wait"],
+        stdout_handler=lambda s: print(s, end="", flush=True),
+        stderr_handler=lambda s: print(s, end="", file=sys.stderr, flush=True),
+    )
+    # Verify cloud-init did not error
+    rc, out, _ = container_exec(cname, ["cloud-init", "status"], check=False)
+    if rc != 0 or "error" in out.lower():
+        print(f"Warning: cloud-init may have encountered errors: {out.strip()}")
+        # Dump the last 60 lines of the output log for diagnosis
+        _, log_out, _ = container_exec(
+            cname,
+            ["tail", "-n", "60", "/var/log/cloud-init-output.log"],
+            check=False,
+        )
+        if log_out.strip():
+            print("--- cloud-init-output.log (last 60 lines) ---")
+            print(log_out)
+            print("---")
+
+    # Write the AILAB_CONFIG_DIR profile.d snippet (config env is already set above)
+    _get_instance(cname).files.put(
+        "/etc/profile.d/ailab-base.sh",
+        f'# ailab: base environment (auto-generated)\nexport AILAB_CONFIG_DIR="{cfg_dir}"\n'.encode(),
+    )
 
     print(f"\nContainer '{name}' is ready!")
     print(f"  Run:   ailab run {name}")
     print(f"  Shell: lxc --project {AILAB_PROJECT} exec {cname} --user {uid} -- /bin/bash -l")
 
 
-def _run_init_script(cname: str, username: str, uid: int, gid: int, home: str):
-    """Push and execute the container init script."""
-    print("Running container initialization (this may take a few minutes)...")
-
-    with importlib.resources.files("ailab.scripts").joinpath("container_init.sh").open("rb") as f:
-        script_content = f.read()
-
-    push_file(cname, "/tmp/ailab-init.sh", script_content)
-
-    _lxc("exec", cname, "--",
-         "bash", "/tmp/ailab-init.sh",
-         username, str(uid), str(gid), home)
-
-
 # ── Port management ───────────────────────────────────────────────────────────
 
 def add_port(name: str, host_port: int, container_port: int, direction: str = "outbound"):
-    """
-    Add a port proxy to a container.
+    """Add a port proxy to a container.
 
     direction: 'outbound' (host → container, for web UIs)
                'inbound'  (container → host, for host services)
@@ -409,20 +887,20 @@ def add_port(name: str, host_port: int, container_port: int, direction: str = "o
 
     if direction == "outbound":
         dev_name = f"proxy-out-custom-{host_port}"
-        result = _lxc("config", "device", "add", cname, dev_name, "proxy",
-                       f"listen=tcp:127.0.0.1:{host_port}",
-                       f"connect=tcp:127.0.0.1:{container_port}",
-                       "bind=host", check=False)
-        if result.returncode != 0:
+        ok = add_proxy_device(cname, dev_name,
+                               f"tcp:127.0.0.1:{host_port}",
+                               f"tcp:127.0.0.1:{container_port}",
+                               bind="host")
+        if not ok:
             print(f"Error: port {host_port} is already in use on the host.")
             sys.exit(1)
         print(f"Added outbound proxy: host:{host_port} → container:{container_port}")
     else:
         dev_name = f"proxy-in-custom-{container_port}"
-        _lxc("config", "device", "add", cname, dev_name, "proxy",
-             f"listen=tcp:127.0.0.1:{container_port}",
-             f"connect=tcp:127.0.0.1:{host_port}",
-             "bind=container")
+        add_proxy_device(cname, dev_name,
+                          f"tcp:127.0.0.1:{container_port}",
+                          f"tcp:127.0.0.1:{host_port}",
+                          bind="container")
         print(f"Added inbound proxy: container:{container_port} → host:{host_port}")
 
 
@@ -433,29 +911,23 @@ def remove_port(name: str, host_port: int, direction: str = "outbound"):
         print(f"Container '{name}' not found.")
         sys.exit(1)
 
-    if direction == "outbound":
-        dev_name = f"proxy-out-custom-{host_port}"
-    else:
-        dev_name = f"proxy-in-custom-{host_port}"
-
-    _lxc("config", "device", "remove", cname, dev_name, check=False)
+    dev_name = (f"proxy-out-custom-{host_port}" if direction == "outbound"
+                else f"proxy-in-custom-{host_port}")
+    remove_proxy_device(cname, dev_name)
     print(f"Removed proxy device '{dev_name}'")
 
 
 def list_ports(name: str):
     """List all proxy devices on a container."""
     cname = _container_name(name)
-    result = _lxc("list", cname, "--format=json", capture=True, check=False)
-    if result.returncode != 0:
-        print(f"Container '{name}' not found.")
-        sys.exit(1)
-    data = json.loads(result.stdout)
-    if not data:
+    try:
+        instance = _get_instance(cname)
+    except RuntimeError:
         print(f"Container '{name}' not found.")
         sys.exit(1)
 
-    devices = data[0].get("expanded_devices", {})
-    proxies = {k: v for k, v in devices.items() if v.get("type") == "proxy"}
+    proxies = {k: v for k, v in instance.expanded_devices.items()
+               if v.get("type") == "proxy"}
     if not proxies:
         print("No proxy devices configured.")
         return
@@ -490,21 +962,22 @@ def run_container(name: str, post_cmds: list[str] | None = None):
 
     if status != "running":
         print(f"Starting container '{name}'...")
-        _lxc("start", cname)
+        _get_instance(cname).start(wait=True)
         _wait_for_ready(cname)
 
     print(f"Opening shell in '{name}' as {username}...")
 
     if post_cmds:
-        # Run each onboard command then exec a login shell so the user lands
-        # in an interactive prompt.  Use '; ' so a failing step doesn't abort.
         chain = "; ".join(post_cmds)
         exec_argv = ["/bin/bash", "--login", "-c", f"{chain}; exec bash --login"]
     else:
         exec_argv = ["/bin/bash", "--login"]
 
-    exec_args = _wrap_with_lxd_group([
-        "lxc", "--project", AILAB_PROJECT,
+    # Use lxc exec for the interactive shell — it's the only operation that
+    # needs a real PTY, which the REST API exec doesn't provide cleanly.
+    lxc = find_lxc()
+    exec_args = [
+        lxc, "--project", AILAB_PROJECT,
         "exec", cname,
         f"--user={uid}",
         f"--group={gid}",
@@ -514,10 +987,11 @@ def run_container(name: str, post_cmds: list[str] | None = None):
         f"--env=XDG_RUNTIME_DIR=/run/user/{uid}",
         f"--env=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
         "--env=TERM=xterm-256color",
+        f"--env=SHELL_WELCOME={build_shell_welcome(name)}",
         f"--cwd={home}",
         "--",
         *exec_argv,
-    ])
+    ]
     os.execvp(exec_args[0], exec_args)
 
 
@@ -535,7 +1009,7 @@ def stop_container(name: str):
         return
 
     print(f"Stopping container '{name}'...")
-    _lxc("stop", cname)
+    _get_instance(cname).stop(wait=True)
     print(f"Container '{name}' stopped.")
 
 
@@ -543,12 +1017,12 @@ def stop_container(name: str):
 
 def list_containers():
     """List all ailab containers."""
-    result = _lxc("list", "--format=json", capture=True, check=False)
-    if result.returncode != 0:
-        print("No containers found (or LXD not available).")
-        return
+    client = _client()
+    # instances.all() has a project-scoping bug in pylxd 2.4.x that appends
+    # '?project=...' to instance names; use the raw API instead.
+    resp = client.api.instances.get(params={"recursion": "1"})
+    containers = resp.json().get("metadata", [])
 
-    containers = json.loads(result.stdout)
     if not containers:
         print("No ailab containers found.")
         print("Create one with: ailab new <name>")
@@ -560,43 +1034,45 @@ def list_containers():
         cname = c["name"]
         status = c.get("status", "unknown")
         ipv4 = ""
-        for net in c.get("state", {}).get("network", {}).values():
-            for addr in net.get("addresses", []):
-                if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                    ipv4 = addr["address"]
-                    break
+
+        # Fetch live state for IP address
+        try:
+            state = client.instances.get(cname).state()
+            for iface in (state.network or {}).values():
+                for addr in iface.get("addresses", []):
+                    if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                        ipv4 = addr["address"]
+                        break
+        except Exception:
+            pass
 
         devices = c.get("expanded_devices", {})
-        ports = []
-        for dev_name, cfg in devices.items():
-            if cfg.get("type") == "proxy" and cfg.get("bind", "host") == "host":
-                listen = cfg.get("listen", "")
-                if ":" in listen:
-                    port = listen.rsplit(":", 1)[-1]
-                    ports.append(port)
-
+        ports = [
+            cfg.get("listen", "").rsplit(":", 1)[-1]
+            for cfg in devices.values()
+            if cfg.get("type") == "proxy" and cfg.get("bind", "host") == "host"
+            and ":" in cfg.get("listen", "")
+        ]
         ports_str = ",".join(sorted(ports, key=int)) if ports else "-"
         print(f"{cname:<25} {status:<12} {ipv4:<18} {ports_str}")
 
 
 def completion_container_names() -> list[str]:
     """Return container names for shell completion."""
-    result = _lxc("list", "--format=json", capture=True, check=False)
-    if result.returncode != 0:
-        return []
-
     try:
-        containers = json.loads(result.stdout)
-    except json.JSONDecodeError:
+        client = _client()
+        resp = client.api.instances.get(params={"recursion": "1"})
+        return sorted(c["name"] for c in resp.json().get("metadata", []) if c.get("name"))
+    except Exception:
         return []
-
-    return sorted(c.get("name", "") for c in containers if c.get("name"))
 
 
 # ── Delete ────────────────────────────────────────────────────────────────────
 
 def delete_container(name: str, force: bool = False):
-    """Stop and delete a container."""
+    """Stop and delete a container and its host-side data directory."""
+    import shutil
+    import subprocess
     cname = _container_name(name)
     if _container_status(cname) == "missing":
         print(f"Container '{name}' not found.")
@@ -608,6 +1084,63 @@ def delete_container(name: str, force: bool = False):
             print("Aborted.")
             return
 
+    # Read the mapped user before deletion so we know where data lives.
+    _, _, _, home = get_container_user(cname)
+    data_dir = container_config_dir(name, home)
+    container_home = _container_home_dir(home, name)
+
+    def _safe_path(path: Path, expected_parent: Path) -> bool:
+        """Return True if path is safely within expected_parent."""
+        try:
+            path.resolve().relative_to(expected_parent.resolve())
+            return True
+        except ValueError:
+            print(f"Warning: unexpected path {path}, skipping removal")
+            return False
+
+    safe_data = _safe_path(data_dir, _ailab_data_root() / "containers")
+    safe_home = _safe_path(container_home, container_home.parent)
+
     print(f"Deleting container '{name}'...")
-    _lxc("delete", cname, "--force")
+    instance = _get_instance(cname)
+
+    if instance.status == "Running":
+        # Delete config dir and home contents from inside the container as root.
+        # Files are owned by the LXD-mapped user uid; container-root can delete
+        # them, bypassing host-side ownership restrictions.
+        if safe_data and data_dir != container_home and data_dir.exists():
+            container_exec(cname, ["rm", "-rf", str(data_dir)], check=False)
+        if safe_home and container_home.exists():
+            # Clear all content inside the home mount point; can't remove the
+            # mount point itself from inside the container.
+            container_exec(
+                cname,
+                ["bash", "-c", f"find {home} -mindepth 1 -delete 2>/dev/null || true"],
+                check=False,
+            )
+        instance.stop(force=True, wait=True)
+    instance.delete(wait=True)
+
+    # Host-side cleanup of any remnants (container was stopped, or in-container
+    # delete only partially succeeded).
+    for path, safe in [(data_dir, safe_data), (container_home, safe_home)]:
+        if safe and path.exists():
+            print(f"Removing {path}")
+            result = subprocess.run(["rm", "-rf", str(path)], check=False)
+            if result.returncode != 0 or path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                print(f"Warning: could not fully remove {path}")
+
+    # In non-snap mode, try to remove ~/ailab/ if it's now empty
+    if not os.environ.get("SNAP_COMMON"):
+        ailab_dir = Path(home) / "ailab"
+        if ailab_dir.exists():
+            try:
+                ailab_dir.rmdir()  # only succeeds if empty
+            except OSError:
+                pass
+
     print(f"Container '{name}' deleted.")
+
+

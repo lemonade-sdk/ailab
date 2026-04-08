@@ -1,0 +1,10 @@
+#!/bin/bash
+# Wrapper for the ailab web daemon that reads snap config for host and port.
+set -euo pipefail
+
+HOST=$(snapctl get web.host)
+PORT=$(snapctl get web.port)
+
+exec "$SNAP/bin/ailab" web \
+    --host "${HOST:-127.0.0.1}" \
+    --port "${PORT:-11500}"

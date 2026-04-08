@@ -10,6 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 keywords = ["lxd", "ai", "sandbox", "ollama", "lemonade", "openclaw"]
+dependencies = [
+    "pylxd>=2.4.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "aiohttp>=3.9.0",
+]
 
 [project.scripts]
 ailab = "ailab.cli:main"
@@ -25,3 +31,4 @@ include = ["ailab*"]
 
 [tool.setuptools.package-data]
 "ailab.scripts" = ["*.sh", "*.js", "*.py", "*.bash"]
+"ailab.web" = ["static/**/*", "static/*"]

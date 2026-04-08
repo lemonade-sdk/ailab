@@ -1,3 +1,20 @@
+ailab (0.0.3) UNRELEASED; urgency=medium
+
+  * Add web management interface (ailab web) with browser-based dashboard,
+    live creation/install progress, in-browser terminal, and log tail
+  * Add python3-fastapi, python3-uvicorn, python3-aiohttp dependencies
+  * Install ailab-web.service systemd user unit for auto-start support
+  * Fix lemonade-server detection to check both port 8000 and 13305
+  * Add proxy devices for lemonade-server port 13305 (>= 10.1)
+  * openclaw: use ~/.openclaw/openclaw.json (openclaw native default path)
+  * openclaw: auto-detect lemonade port at install time
+  * openclaw: default model Qwen3-4B-Instruct-2507-GGUF; load at install
+  * openclaw: run provider setup after onboard so config is not overwritten
+  * Suppress spurious chown errors in snap mode
+  * Improve postinst messaging; clarify lxd group re-login requirement
+
+ -- Ken VanDine <ken@vandine.org>  Tue, 08 Apr 2026 12:00:00 -0400
+
 ailab (0.0.2) resolute; urgency=medium
 
   * Fixed lxd default profile handling

@@ -18,6 +18,9 @@ Architecture: all
 Depends:
  ${misc:Depends},
  ${python3:Depends},
+ python3-aiohttp,
+ python3-fastapi,
+ python3-uvicorn,
  snapd,
  util-linux-extra
 Description: LXD-based sandboxes for running AI tools safely on Ubuntu
@@ -25,6 +28,10 @@ Description: LXD-based sandboxes for running AI tools safely on Ubuntu
  the host while keeping installed software isolated from the rest of the
  system. Each container shares the user's home directory so files remain
  directly accessible on the host.
+ .
+ Includes a web management interface (ailab web) for creating and managing
+ containers from the browser, with live progress logs and an in-browser
+ terminal.
  .
  This package depends on snapd, installs the lxd snap during package
  configuration if needed, and installs the lemonade-server snap only when

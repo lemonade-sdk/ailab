@@ -6,12 +6,13 @@ from ..container import (
     _container_name,
     _container_status,
     _current_user,
-    _lxc,
-    _wait_for_ready,
+    add_proxy_device,
     container_config_dir,
+    container_exec,
+    has_device,
     push_file,
     set_container_env,
-    OUTBOUND_PROXIES,
+    start_container,
 )
 
 # picoclaw WebUI launcher port
@@ -36,13 +37,11 @@ class PicoClawInstaller:
 
         if _container_status(cname) != "running":
             print(f"Starting container '{container_name}'...")
-            _lxc("start", cname)
-            _wait_for_ready(cname)
+            start_container(cname)
 
         cfg_dir = container_config_dir(container_name, home) / "picoclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        _lxc("exec", cname, "--",
-             "chown", "-R", f"{uid}:{gid}", str(cfg_dir))
+        container_exec(cname, ["chown", "-R", f"{uid}:{gid}", str(cfg_dir)])
 
         print("Installing picoclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)
@@ -157,23 +156,16 @@ if ! command -v picoclaw-launcher >/dev/null 2>&1; then
   ln -sf /usr/local/bin/picoclaw /usr/local/bin/picoclaw-launcher 2>/dev/null || true
 fi
 """
-        _lxc("exec", cname, "--", "bash", "-c", install_script)
+        container_exec(cname, ["bash", "-c", install_script])
 
     def _add_port_proxy(self, cname: str):
-        if any(port == PICOCLAW_WEBUI_PORT for _, port in OUTBOUND_PROXIES):
+        if has_device(cname, PICOCLAW_PROXY_DEVICE):
             return
-
-        # Check if already added by a prior install
-        result = _lxc("config", "device", "show", cname, capture=True, check=False)
-        if result.returncode == 0 and PICOCLAW_PROXY_DEVICE in result.stdout:
-            return
-
-        _lxc(
-            "config", "device", "add", cname,
-            PICOCLAW_PROXY_DEVICE, "proxy",
-            f"listen=tcp:127.0.0.1:{PICOCLAW_WEBUI_PORT}",
-            f"connect=tcp:127.0.0.1:{PICOCLAW_WEBUI_PORT}",
-            "bind=host",
+        add_proxy_device(
+            cname, PICOCLAW_PROXY_DEVICE,
+            f"tcp:127.0.0.1:{PICOCLAW_WEBUI_PORT}",
+            f"tcp:127.0.0.1:{PICOCLAW_WEBUI_PORT}",
+            bind="host",
         )
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
@@ -182,12 +174,9 @@ fi
 
         push_file(cname, "/tmp/setup_picoclaw.py", script_content)
 
-        _lxc(
-            "exec", cname,
-            f"--user={uid}",
-            f"--group={gid}",
-            f"--env=HOME={home}",
-            f"--env=PICOCLAW_CONFIG_DIR={cfg_dir}",
-            "--",
-            "python3", "/tmp/setup_picoclaw.py",
+        container_exec(
+            cname,
+            ["python3", "/tmp/setup_picoclaw.py"],
+            uid=uid, gid=gid,
+            env={"HOME": home, "PICOCLAW_CONFIG_DIR": str(cfg_dir)},
         )
