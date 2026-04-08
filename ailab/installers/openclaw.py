@@ -1,6 +1,7 @@
 """Installer for openclaw inside an ailab container."""
 
 import importlib.resources
+import json
 import os
 import secrets
 from pathlib import Path

@@ -6,7 +6,6 @@ from ..container import (
     _container_name,
     _container_status,
     _current_user,
-    _wait_for_ready,
     add_proxy_device,
     container_config_dir,
     container_exec,

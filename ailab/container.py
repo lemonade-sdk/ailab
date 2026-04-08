@@ -812,7 +812,7 @@ def create_container(
             "raw.idmap": idmap,
             "security.nesting": "true",
             "user.user-data": _cloud_init_userdata(username, uid, gid, home),
-            f"environment.AILAB_CONFIG_DIR": str(cfg_dir),
+            "environment.AILAB_CONFIG_DIR": str(cfg_dir),
             "user.ailab-mapped-user": username,
         },
         "devices": devices,

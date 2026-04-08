@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,25 +25,18 @@ from ailab.container import (
     _current_user,
     _find_lxd_socket,
     _get_instance,
-    _host_port_in_use,
-    _partition_conflicting_proxies,
     _user_info,
     add_port,
-    add_proxy_device,
     build_shell_welcome,
     container_config_dir,
     container_exec,
     create_container,
     delete_container,
     get_container_user,
-    has_device,
-    list_ports,
     list_system_users,
-    remove_port,
     remove_proxy_device,
     start_container,
     stop_container,
-    OUTBOUND_PROXIES,
 )
 from ailab.installers import INSTALLERS, get_installer
 from ailab.installers.openclaw import (
