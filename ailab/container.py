@@ -1024,30 +1024,42 @@ def delete_container(name: str, force: bool = False):
     _, _, _, home = get_container_user(cname)
     data_dir = container_config_dir(name, home)
 
+    # Validate the path is within the expected parent before any destructive op.
+    expected_parent = _ailab_data_root() / "containers"
+    try:
+        data_dir.resolve().relative_to(expected_parent.resolve())
+        safe_to_remove = True
+    except ValueError:
+        print(f"Warning: unexpected data dir path {data_dir}, skipping removal")
+        safe_to_remove = False
+
     print(f"Deleting container '{name}'...")
     instance = _get_instance(cname)
+
+    # Delete data dir from inside the container while it's still accessible.
+    # Files in data_dir are owned by the LXD-mapped user uid; deleting them as
+    # container-root bypasses host-side ownership restrictions (AppArmor or
+    # non-root snap daemon).
+    if safe_to_remove and data_dir.exists() and instance.status == "Running":
+        container_exec(
+            cname,
+            ["rm", "-rf", str(data_dir)],
+            check=False,
+        )
+
     if instance.status == "Running":
         instance.stop(force=True, wait=True)
     instance.delete(wait=True)
 
-    if data_dir.exists():
+    # Clean up any remnants the in-container delete missed (e.g. container
+    # was already stopped, or the disk device wasn't mounted).
+    if safe_to_remove and data_dir.exists():
         print(f"Removing container data directory: {data_dir}")
-        # Validate the path is within the expected parent before any destructive op.
-        expected_parent = _ailab_data_root() / "containers"
-        try:
-            data_dir.resolve().relative_to(expected_parent.resolve())
-        except ValueError:
-            print(f"Warning: unexpected data dir path {data_dir}, skipping removal")
-        else:
-            # shutil.rmtree with ignore_errors silently skips files owned by
-            # other uids; use rm -rf (runs as root in the snap daemon) so
-            # container-user-owned files are removed too.
-            result = subprocess.run(["rm", "-rf", str(data_dir)], check=False)
-            if result.returncode != 0 or data_dir.exists():
-                # Fallback: Python-level rmtree
-                shutil.rmtree(data_dir, ignore_errors=True)
-            if data_dir.exists():
-                print(f"Warning: could not fully remove {data_dir}")
+        result = subprocess.run(["rm", "-rf", str(data_dir)], check=False)
+        if result.returncode != 0 or data_dir.exists():
+            shutil.rmtree(data_dir, ignore_errors=True)
+        if data_dir.exists():
+            print(f"Warning: could not fully remove {data_dir}")
 
     print(f"Container '{name}' deleted.")
 
