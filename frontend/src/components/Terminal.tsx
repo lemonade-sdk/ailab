@@ -19,30 +19,54 @@ export function Terminal({ containerName, onClose }: Props) {
     term.loadAddon(fitAddon);
     term.loadAddon(linksAddon);
     term.open(divRef.current!);
-    fitAddon.fit();
 
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/shell/${containerName}`);
-    ws.binaryType = 'arraybuffer';
+    let ws: WebSocket | null = null;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    };
-    ws.onmessage = (e) => {
-      term.write(new Uint8Array(e.data as ArrayBuffer));
-    };
-    ws.onclose = () => term.write('\r\n[connection closed]\r\n');
+    function connectWs() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}/api/ws/shell/${containerName}`);
+      ws.binaryType = 'arraybuffer';
 
-    term.onData((data) => ws.send(new TextEncoder().encode(data)));
-    term.onResize(({ cols, rows }) => {
-      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      ws.onopen = () => {
+        ws!.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      };
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') {
+          term.write(e.data);
+        } else {
+          term.write(new Uint8Array(e.data as ArrayBuffer));
+        }
+      };
+      ws.onclose = () => term.write('\r\n[connection closed]\r\n');
+
+      term.onData((data) => ws!.send(new TextEncoder().encode(data)));
+      term.onResize(({ cols, rows }) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+        }
+      });
+    }
+
+    // Wait for layout so fitAddon gets real dimensions before connecting.
+    // requestAnimationFrame fires after the browser paints the flex container.
+    requestAnimationFrame(() => {
+      fitAddon.fit();
+      if (term.cols > 0 && term.rows > 0) {
+        connectWs();
+      }
     });
 
-    const ro = new ResizeObserver(() => fitAddon.fit());
+    const ro = new ResizeObserver(() => {
+      fitAddon.fit();
+      // Connect on first real fit if we haven't yet (fallback for slow layouts)
+      if (!ws && term.cols > 0 && term.rows > 0) {
+        connectWs();
+      }
+    });
     ro.observe(divRef.current!);
 
     return () => {
-      ws.close();
+      if (ws) ws.close();
       term.dispose();
       ro.disconnect();
     };

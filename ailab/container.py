@@ -569,6 +569,16 @@ def _cloud_init_userdata(username: str, uid: int, gid: int, home: str) -> str:
             chmod 644 "$dest"
         done
 
+        # Disable slow MOTD scripts that fetch from the network or run
+        # apt checks — they can stall a login shell for minutes when the
+        # container's DNS/network is slow or the apt cache is cold.
+        for f in /etc/update-motd.d/50-motd-news \
+                 /etc/update-motd.d/90-updates-available \
+                 /etc/update-motd.d/91-release-upgrade \
+                 /etc/update-motd.d/95-hwe-eol; do
+            [ -f "$f" ] && chmod -x "$f"
+        done
+
         loginctl enable-linger "$USERNAME" \
             || log "Warning: loginctl enable-linger failed (non-fatal)"
         systemctl start "user@${USER_UID}.service" \
