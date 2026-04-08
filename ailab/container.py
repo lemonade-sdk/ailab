@@ -1008,6 +1008,7 @@ def completion_container_names() -> list[str]:
 def delete_container(name: str, force: bool = False):
     """Stop and delete a container and its host-side data directory."""
     import shutil
+    import subprocess
     cname = _container_name(name)
     if _container_status(cname) == "missing":
         print(f"Container '{name}' not found.")
@@ -1029,12 +1030,25 @@ def delete_container(name: str, force: bool = False):
         instance.stop(force=True, wait=True)
     instance.delete(wait=True)
 
-    try:
-        if data_dir.exists():
-            print(f"Removing container data directory: {data_dir}")
-            shutil.rmtree(data_dir, ignore_errors=True)
-    except OSError:
-        pass  # Path inaccessible (e.g. snap confinement on old-style hidden dir)
+    if data_dir.exists():
+        print(f"Removing container data directory: {data_dir}")
+        # Validate the path is within the expected parent before any destructive op.
+        expected_parent = _ailab_data_root() / "containers"
+        try:
+            data_dir.resolve().relative_to(expected_parent.resolve())
+        except ValueError:
+            print(f"Warning: unexpected data dir path {data_dir}, skipping removal")
+        else:
+            # shutil.rmtree with ignore_errors silently skips files owned by
+            # other uids; use rm -rf (runs as root in the snap daemon) so
+            # container-user-owned files are removed too.
+            result = subprocess.run(["rm", "-rf", str(data_dir)], check=False)
+            if result.returncode != 0 or data_dir.exists():
+                # Fallback: Python-level rmtree
+                shutil.rmtree(data_dir, ignore_errors=True)
+            if data_dir.exists():
+                print(f"Warning: could not fully remove {data_dir}")
 
     print(f"Container '{name}' deleted.")
+
 
