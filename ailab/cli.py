@@ -273,7 +273,7 @@ examples:
 
     # ── web ────────────────────────────────────────────────────────────────────
     p_web = sub.add_parser("web", help="Start the ailab web management interface")
-    p_web.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
+    p_web.add_argument("--host", default="::", help="Host to bind to (default: :: — dual-stack IPv4+IPv6)")
     p_web.add_argument("--port", "-p", type=int, default=11500, help="Port to listen on (default: 11500)")
     p_web.add_argument("--reload", action="store_true", help="Enable auto-reload (development)")
     p_web.set_defaults(func=cmd_web)

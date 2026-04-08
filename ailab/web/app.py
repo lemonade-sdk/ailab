@@ -216,55 +216,60 @@ def _sse_stream(task_fn):
 
 @app.get("/api/containers")
 async def api_list_containers():
-    client = _client()
-    resp = client.api.instances.get(params={"recursion": "1"})
-    containers = resp.json().get("metadata", [])
-    loop = asyncio.get_event_loop()
-    results = await asyncio.gather(
-        *[loop.run_in_executor(None, _container_summary, c, client) for c in containers]
-    )
-    return list(results)
+    def _fetch():
+        client = _client()
+        resp = client.api.instances.get(params={"recursion": "1"})
+        containers = resp.json().get("metadata", [])
+        return [_container_summary(c, client) for c in containers]
+    return await asyncio.to_thread(_fetch)
 
 
 @app.get("/api/containers/{name}")
 async def api_get_container(name: str):
     cname = _container_name(name)
-    client = _client()
-    try:
-        instance = _get_instance(cname)
-    except pylxd.exceptions.NotFound:
-        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
-    ipv4 = await asyncio.get_event_loop().run_in_executor(None, _get_ipv4, client, cname)
 
-    devices = instance.expanded_devices or {}
-    outbound = []
-    inbound = []
-    for dev_name, cfg in devices.items():
-        if cfg.get("type") != "proxy":
-            continue
-        listen = cfg.get("listen", "")
-        connect = cfg.get("connect", "")
-        bind = cfg.get("bind", "host")
-        entry = {
-            "device": dev_name,
-            "listen": listen,
-            "connect": connect,
-            "direction": "inbound" if bind == "instance" else "outbound",
+    def _fetch():
+        client = _client()
+        try:
+            instance = _get_instance(cname)
+        except pylxd.exceptions.NotFound:
+            return None
+        ipv4 = _get_ipv4(client, cname)
+
+        devices = instance.expanded_devices or {}
+        outbound = []
+        inbound = []
+        for dev_name, cfg in devices.items():
+            if cfg.get("type") != "proxy":
+                continue
+            listen = cfg.get("listen", "")
+            connect = cfg.get("connect", "")
+            bind = cfg.get("bind", "host")
+            entry = {
+                "device": dev_name,
+                "listen": listen,
+                "connect": connect,
+                "direction": "inbound" if bind == "instance" else "outbound",
+            }
+            if bind == "instance":
+                inbound.append(entry)
+            else:
+                outbound.append(entry)
+
+        return {
+            "name": cname,
+            "status": instance.status,
+            "ipv4": ipv4,
+            "config": dict(instance.config or {}),
+            "devices": devices,
+            "outbound_ports": outbound,
+            "inbound_ports": inbound,
         }
-        if bind == "instance":
-            inbound.append(entry)
-        else:
-            outbound.append(entry)
 
-    return {
-        "name": cname,
-        "status": instance.status,
-        "ipv4": ipv4,
-        "config": dict(instance.config or {}),
-        "devices": devices,
-        "outbound_ports": outbound,
-        "inbound_ports": inbound,
-    }
+    result = await asyncio.to_thread(_fetch)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Container '{name}' not found")
+    return result
 
 
 @app.post("/api/containers/create")
@@ -334,20 +339,24 @@ async def api_install_package(name: str, req: InstallRequest):
 @app.get("/api/containers/{name}/ports")
 async def api_list_ports(name: str):
     cname = _container_name(name)
-    instance = _get_instance(cname)
-    devices = instance.expanded_devices or {}
-    ports = []
-    for dev_name, cfg in devices.items():
-        if cfg.get("type") != "proxy":
-            continue
-        bind = cfg.get("bind", "host")
-        ports.append({
-            "device": dev_name,
-            "direction": "inbound" if bind == "instance" else "outbound",
-            "listen": cfg.get("listen", ""),
-            "connect": cfg.get("connect", ""),
-        })
-    return ports
+
+    def _fetch():
+        instance = _get_instance(cname)
+        devices = instance.expanded_devices or {}
+        ports = []
+        for dev_name, cfg in devices.items():
+            if cfg.get("type") != "proxy":
+                continue
+            bind = cfg.get("bind", "host")
+            ports.append({
+                "device": dev_name,
+                "direction": "inbound" if bind == "instance" else "outbound",
+                "listen": cfg.get("listen", ""),
+                "connect": cfg.get("connect", ""),
+            })
+        return ports
+
+    return await asyncio.to_thread(_fetch)
 
 
 @app.post("/api/containers/{name}/ports")
@@ -410,7 +419,7 @@ def _get_or_create_gateway_token(cfg_dir: Path) -> str:
 async def api_gateway_url(name: str):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
-    _, _, _, home = _get_container_user(cname)
+    _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
     cfg_dir = container_config_dir(name, home) / "openclaw"
     token = _read_gateway_token(cfg_dir)
     if not token:
@@ -422,10 +431,11 @@ async def api_gateway_url(name: str):
 async def api_gateway_pair(name: str):
     """Run openclaw onboard inside the container to pair the gateway device."""
     cname = _container_name(name)
-    if _container_status(cname) != "running":
+    status = await asyncio.to_thread(_container_status, cname)
+    if status != "running":
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
-    username, uid, gid, home = _get_container_user(cname)
+    username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
     cfg_dir = container_config_dir(name, home) / "openclaw"
 
     if not cfg_dir.exists():
@@ -484,10 +494,8 @@ async def api_list_users():
 @app.websocket("/api/ws/shell/{name}")
 async def shell_ws(ws: WebSocket, name: str):
     await ws.accept()
-    print(f"[shell_ws] {name}: accepted, resolving user...", flush=True)
     cname = _container_name(name)
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    print(f"[shell_ws] {name}: user resolved, building welcome...", flush=True)
 
     try:
         welcome = await asyncio.to_thread(build_shell_welcome, name)
@@ -513,8 +521,6 @@ async def shell_ws(ws: WebSocket, name: str):
         "group": gid,
     }
 
-    print(f"[shell_ws] {name}: user={username} uid={uid} home={home}")
-
     try:
         socket_path = _find_lxd_socket()
     except FileNotFoundError as exc:
@@ -532,8 +538,6 @@ async def shell_ws(ws: WebSocket, name: str):
             ) as resp:
                 op = await resp.json()
 
-            print(f"[shell_ws] {name}: exec response status={op.get('status_code')}")
-
             if op.get("status_code") not in (100, 200):
                 err = op.get("error", "unknown error")
                 logger.error("LXD exec failed for %s: %s  full response: %s", cname, err, op)
@@ -547,55 +551,17 @@ async def shell_ws(ws: WebSocket, name: str):
 
             ws_url = "http://localhost/1.0/operations/{}/websocket".format(uuid)
 
-            print(f"[shell_ws] {name}: connecting LXD websockets for op {uuid}")
-
             async with http.ws_connect(ws_url, params={"secret": data_secret}) as lxd_data, \
                        http.ws_connect(ws_url, params={"secret": ctrl_secret}) as lxd_ctrl:
 
-                print(f"[shell_ws] {name}: LXD websockets connected, starting relay")
-
-                # Send a visible test marker to the browser — if this
-                # appears instantly, the browser WS is working.
-                await ws.send_bytes(b"\r\n[connected]\r\n")
-
-                # Drain the resize message the browser sent on connect
-                # (before the LXD sockets were ready) and apply it now so
-                # the PTY has correct dimensions before bash prints its
-                # prompt.  Fall back to 80×24 if the message is missing.
-                init_cols, init_rows = 80, 24
-                try:
-                    first = await asyncio.wait_for(ws.receive(), timeout=2.0)
-                    raw = first.get("text")
-                    if raw:
-                        data = json.loads(raw)
-                        if data.get("type") == "resize":
-                            init_cols = int(data["cols"])
-                            init_rows = int(data["rows"])
-                except Exception:
-                    pass
-                await lxd_ctrl.send_json({
-                    "command": "window-resize",
-                    "args": {"width": str(init_cols), "height": str(init_rows)},
-                })
-
                 async def lxd_to_browser():
-                    import time as _time
-                    msg_count = 0
-                    t0 = _time.monotonic()
                     async for msg in lxd_data:
-                        msg_count += 1
-                        if msg_count <= 10:
-                            elapsed = _time.monotonic() - t0
-                            preview = repr(msg.data[:80]) if msg.data else "b''"
-                            print(f"[shell_ws] {name}: msg#{msg_count} +{elapsed:.1f}s type={msg.type} len={len(msg.data) if msg.data else 0} {preview}", flush=True)
                         if msg.type == aiohttp.WSMsgType.BINARY:
                             await ws.send_bytes(msg.data)
                         elif msg.type == aiohttp.WSMsgType.TEXT:
                             await ws.send_text(msg.data)
                         elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
-                            print(f"[shell_ws] {name}: LXD ws closed/error after {msg_count} msgs")
                             break
-                    print(f"[shell_ws] {name}: lxd_to_browser ended after {msg_count} msgs")
 
                 async def browser_to_lxd():
                     while True:
@@ -632,13 +598,23 @@ async def shell_ws(ws: WebSocket, name: str):
                     for task in [t1, t2]:
                         task.cancel()
                     await asyncio.gather(t1, t2, return_exceptions=True)
-
+                    # Explicitly close LXD websockets so the Unix socket is freed
+                    for lxd_ws in (lxd_data, lxd_ctrl):
+                        try:
+                            await lxd_ws.close()
+                        except Exception:
+                            pass
     except WebSocketDisconnect:
         pass
     except Exception as exc:
         logger.error("shell_ws error for %s: %s", name, exc, exc_info=True)
         try:
             await ws.send_text(f"\r\n[shell error: {exc}]\r\n")
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
         except Exception:
             pass
 
