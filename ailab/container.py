@@ -21,8 +21,9 @@ BASE_IMAGE_ALIAS = "devel"
 # Ports proxied INTO the container (container localhost → host service)
 # Apps in the container connect to these as if they're local, but they reach the host.
 INBOUND_PROXIES = [
-    ("lemonade", 8000),   # lemonade-server
-    ("ollama",   11434),  # ollama
+    ("lemonade",       8000),  # lemonade-server < 10.1
+    ("lemonade-13305", 13305), # lemonade-server >= 10.1
+    ("ollama",         11434), # ollama
 ]
 
 # Ports proxied FROM the container to the host (host browser → container service).
