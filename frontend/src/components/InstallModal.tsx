@@ -20,7 +20,8 @@ export function InstallModal({ containerName, onClose, onDone }: Props) {
   useEffect(() => {
     getPackages().then((pkgs) => {
       setPackages(pkgs);
-      if (pkgs.length > 0) setSelected(pkgs[0].name);
+      const visible = pkgs.filter((p) => !['nullclaw', 'picoclaw'].includes(p.name));
+      if (visible.length > 0) setSelected(visible[0].name);
     }).catch(console.error);
   }, []);
 
