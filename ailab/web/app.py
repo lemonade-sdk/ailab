@@ -376,12 +376,17 @@ async def api_remove_port(name: str, device_name: str):
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
 def _read_gateway_token(cfg_dir: Path) -> str | None:
-    """Read the gateway shared token from openclaw.json (used in the dashboard URL).
+    """Read the gateway shared token (used in the dashboard URL).
 
-    The dashboard URL format is http://localhost:18789/#token=<GATEWAY_SHARED_TOKEN>.
-    This is the gateway auth token stored under gateway.auth.token in openclaw.json.
-    Only present once openclaw has been onboarded.
+    Checks our own ``gateway-token`` file first (written by the installer and
+    never touched by openclaw's own config management), then falls back to the
+    ``gateway.auth.token`` field in ``openclaw.json`` for backwards compat.
     """
+    token_file = cfg_dir / "gateway-token"
+    if token_file.exists():
+        token = token_file.read_text().strip()
+        if token:
+            return token
     openclaw_json = cfg_dir / "openclaw.json"
     if not openclaw_json.exists():
         return None
@@ -423,7 +428,7 @@ async def api_gateway_pair(name: str):
     username, uid, gid, home = _get_container_user(cname)
     cfg_dir = container_config_dir(name, home) / "openclaw"
 
-    if not (cfg_dir / "openclaw.json").exists():
+    if not cfg_dir.exists():
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
     installer = OpenclawInstaller()
@@ -432,8 +437,21 @@ async def api_gateway_pair(name: str):
         gateway_token = _get_or_create_gateway_token(cfg_dir)
         print("Configuring gateway environment...")
         installer._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
-        print("Pairing gateway device (this takes ~10 seconds)...")
-        installer._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+
+        # If openclaw is already onboarded (has device state), just restart the
+        # gateway service with the refreshed env — no need to re-run onboard.
+        already_onboarded = any(
+            (cfg_dir / d).exists()
+            for d in ("devices", "identity")
+        )
+        if already_onboarded:
+            print("openclaw already onboarded — restarting gateway service...")
+            installer._restart_gateway(cname, uid, gid, home)
+        else:
+            print("Pairing gateway device (this takes ~10 seconds)...")
+            installer._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+            installer._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
+
         token = _read_gateway_token(cfg_dir)
         if token:
             print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")

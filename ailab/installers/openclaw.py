@@ -87,6 +87,8 @@ class OpenclawInstaller:
         gateway_token = self._generate_gateway_token(uid)
         self._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
         self._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+        # Re-patch after onboard in case openclaw rewrote openclaw.json
+        self._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
 
         print()
         print(f"openclaw installed in '{container_name}'.")
@@ -125,6 +127,53 @@ class OpenclawInstaller:
     def _generate_gateway_token(self, uid: int) -> str:
         """Generate a random gateway shared token for the openclaw gateway."""
         return secrets.token_urlsafe(32)
+
+    def _patch_gateway_token_in_json(
+        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+    ):
+        """Patch gateway.auth.token into openclaw.json (run as container user).
+
+        openclaw onboard may rewrite openclaw.json without preserving the token
+        field; call this after onboard to ensure it's always set.
+        """
+        patch_py = (
+            "import json\n"
+            f"p = '{cfg_dir}/openclaw.json'\n"
+            "try:\n"
+            "    d = json.loads(open(p).read())\n"
+            "except Exception:\n"
+            "    d = {}\n"
+            f"d.setdefault('gateway', {{}}).setdefault('auth', {{}})['token'] = '{gateway_token}'\n"
+            "open(p, 'w').write(json.dumps(d, indent=2) + '\\n')\n"
+        )
+        container_exec(
+            cname,
+            ["python3"],
+            uid=uid, gid=gid,
+            stdin=patch_py.encode(),
+            env={
+                "HOME": home,
+                "OPENCLAW_STATE_DIR": str(cfg_dir),
+                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+            },
+            check=False,
+        )
+
+    def _restart_gateway(self, cname: str, uid: int, gid: int, home: str):
+        """Restart the openclaw-gateway systemd service inside the container."""
+        container_exec(
+            cname,
+            ["bash", "-c",
+             "systemctl --user daemon-reload 2>/dev/null || true"
+             " && systemctl --user restart openclaw-gateway 2>/dev/null || true"],
+            uid=uid, gid=gid,
+            env={
+                "HOME": home,
+                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            },
+            check=False,
+        )
 
     def _configure_gateway_env(
         self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
@@ -171,31 +220,19 @@ class OpenclawInstaller:
             ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
             stdin=snippet.encode(),
         )
-        # Write gateway.auth.token directly into openclaw.json so the dashboard
-        # URL can be constructed even if openclaw onboard doesn't write the token.
-        # Done via container_exec so it runs as the container user (who owns the file).
-        patch_py = (
-            "import json\n"
-            f"p = '{cfg_dir}/openclaw.json'\n"
-            "try:\n"
-            "    d = json.loads(open(p).read())\n"
-            "except Exception:\n"
-            "    d = {}\n"
-            f"d.setdefault('gateway', {{}}).setdefault('auth', {{}})['token'] = '{gateway_token}'\n"
-            "open(p, 'w').write(json.dumps(d, indent=2) + '\\n')\n"
-        )
+        # Write the token to our own file (never touched by openclaw's config management).
+        # This is the primary source of truth for the dashboard URL.
         container_exec(
             cname,
-            ["python3"],
+            ["bash", "-c", f"printf '%s' '{gateway_token}' > '{cfg_dir}/gateway-token'"],
             uid=uid, gid=gid,
-            stdin=patch_py.encode(),
-            env={
-                "HOME": home,
-                "OPENCLAW_STATE_DIR": str(cfg_dir),
-                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
-            },
+            env={"HOME": home},
             check=False,
         )
+        # Also patch gateway.auth.token into openclaw.json as a backup so openclaw
+        # itself can read the token.  openclaw onboard may rewrite this file, so
+        # we re-patch after onboard as well (_patch_gateway_token_in_json).
+        self._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
 
         # Now enable the service (drop-in is in place, safe to start)
         container_exec(
