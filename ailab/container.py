@@ -307,8 +307,7 @@ def build_shell_welcome(container_name: str) -> str:
     import json as _json
     cname = _container_name(container_name)
     _, _, _, home = get_container_user(cname)
-    cfg_root = container_config_dir(container_name, home)
-    openclaw_json = cfg_root / "openclaw" / "openclaw.json"
+    openclaw_json = _container_home_dir(container_name, home) / ".openclaw" / "openclaw.json"
 
     lines = ["Welcome to your AI Lab container!\n"]
 

@@ -1,23 +1,17 @@
 """Installer for openclaw inside an ailab container."""
 
 import importlib.resources
-import json
-import os
 import secrets
 from pathlib import Path
 
 from ..container import (
     _container_name,
     _container_status,
-    _current_user,
-    _wait_for_ready,
     add_proxy_device,
-    container_config_dir,
     container_exec,
     get_container_user,
     has_device,
     push_file,
-    set_container_env,
     start_container,
 )
 
@@ -53,15 +47,6 @@ class OpenclawInstaller:
             print(f"Starting container '{container_name}'...")
             start_container(cname)
 
-        # Per-container config dir (inside the bind-mounted home, so no extra mount)
-        cfg_dir = container_config_dir(container_name, home) / "openclaw"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        # Ensure the mapped user can write into the directory.
-        try:
-            os.chown(cfg_dir, uid, gid)
-        except OSError:
-            cfg_dir.chmod(0o777)
-
         print("Installing openclaw via npm...")
         self._npm_install(cname, uid)
 
@@ -71,29 +56,23 @@ class OpenclawInstaller:
         print("Adding openclaw gateway port proxy (18789)...")
         self._add_port_proxy(cname)
 
-        print("Setting openclaw config env vars...")
-        env = {
-            "OPENCLAW_STATE_DIR":   str(cfg_dir),
-            "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
-        }
-        set_container_env(cname, env, profile_name="openclaw")
-        self._write_onboard_wrapper(cname, cfg_dir)
-        self._install_shell_completion(cname, uid, gid, home, cfg_dir)
+        self._write_onboard_wrapper(cname, home)
+        self._install_shell_completion(cname, uid, gid, home)
 
         print("Configuring openclaw (probing downloaded lemonade models via /api/v1/models)...")
-        self._run_setup(cname, uid, gid, home, cfg_dir)
+        self._run_setup(cname, uid, gid, home)
 
         print("Pairing openclaw gateway device (generating access token)...")
         gateway_token = self._generate_gateway_token(uid)
-        self._configure_gateway_env(cname, uid, gid, home, cfg_dir, gateway_token)
-        self._run_onboard(cname, uid, gid, home, cfg_dir, gateway_token)
+        self._configure_gateway_env(cname, uid, gid, home, gateway_token)
+        self._run_onboard(cname, uid, gid, home, gateway_token)
         # Re-patch after onboard in case openclaw rewrote openclaw.json
-        self._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
+        self._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
 
         print()
         print(f"openclaw installed in '{container_name}'.")
         print()
-        print(f"  Config:       {cfg_dir}/openclaw.json")
+        print(f"  Config:       {home}/.openclaw/openclaw.json")
         print(f"  Start:        ailab run {container_name}")
         print("  Launch:       openclaw")
         print(f"  Web UI:       http://localhost:18789/#token={gateway_token}")
@@ -112,7 +91,7 @@ class OpenclawInstaller:
             check=False,
         )
         # Only reload — do NOT enable/start yet.  The service needs the ailab
-        # drop-in (with OPENCLAW_STATE_DIR/CONFIG_PATH) before it first runs.
+        # drop-in (with OPENCLAW_GATEWAY_TOKEN) before it first runs.
         container_exec(
             cname,
             ["bash", "-c", "systemctl --user daemon-reload 2>/dev/null || true"],
@@ -130,7 +109,7 @@ class OpenclawInstaller:
         return secrets.token_urlsafe(32)
 
     def _patch_gateway_token_in_json(
-        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+        self, cname: str, uid: int, gid: int, home: str, gateway_token: str
     ):
         """Patch gateway.auth.token into openclaw.json (run as container user).
 
@@ -138,8 +117,8 @@ class OpenclawInstaller:
         field; call this after onboard to ensure it's always set.
         """
         patch_py = (
-            "import json\n"
-            f"p = '{cfg_dir}/openclaw.json'\n"
+            "import json, os\n"
+            "p = os.path.join(os.environ['HOME'], '.openclaw', 'openclaw.json')\n"
             "try:\n"
             "    d = json.loads(open(p).read())\n"
             "except Exception:\n"
@@ -152,11 +131,7 @@ class OpenclawInstaller:
             ["python3"],
             uid=uid, gid=gid,
             stdin=patch_py.encode(),
-            env={
-                "HOME": home,
-                "OPENCLAW_STATE_DIR": str(cfg_dir),
-                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
-            },
+            env={"HOME": home},
             check=False,
         )
 
@@ -177,19 +152,15 @@ class OpenclawInstaller:
         )
 
     def _configure_gateway_env(
-        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+        self, cname: str, uid: int, gid: int, home: str, gateway_token: str
     ):
         """Write gateway env vars to environment.d and a systemd service drop-in.
 
         The drop-in ensures the gateway service always starts with the correct
-        state directory and token, regardless of how the user session was started.
+        token, regardless of how the user session was started.
         """
         env_dir = Path(home) / ".config" / "environment.d"
-        conf = (
-            f"OPENCLAW_STATE_DIR={cfg_dir}\n"
-            f"OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json\n"
-            f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
-        )
+        conf = f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
         # Write environment.d for CLI / login-shell use
         container_exec(
             cname,
@@ -198,13 +169,11 @@ class OpenclawInstaller:
             env={"HOME": home},
             stdin=conf.encode(),
         )
-        # Write a systemd service drop-in so the daemon always has the vars,
+        # Write a systemd service drop-in so the daemon always has the token,
         # even in a lingering session where environment.d may not be sourced.
         dropin_dir = Path(home) / ".config" / "systemd" / "user" / "openclaw-gateway.service.d"
         dropin = (
             "[Service]\n"
-            f"Environment=OPENCLAW_STATE_DIR={cfg_dir}\n"
-            f"Environment=OPENCLAW_CONFIG_PATH={cfg_dir}/openclaw.json\n"
             f"Environment=OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
         )
         container_exec(
@@ -221,19 +190,10 @@ class OpenclawInstaller:
             ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
             stdin=snippet.encode(),
         )
-        # Write the token to our own file (never touched by openclaw's config management).
-        # This is the primary source of truth for the dashboard URL.
-        container_exec(
-            cname,
-            ["bash", "-c", f"printf '%s' '{gateway_token}' > '{cfg_dir}/gateway-token'"],
-            uid=uid, gid=gid,
-            env={"HOME": home},
-            check=False,
-        )
-        # Also patch gateway.auth.token into openclaw.json as a backup so openclaw
-        # itself can read the token.  openclaw onboard may rewrite this file, so
-        # we re-patch after onboard as well (_patch_gateway_token_in_json).
-        self._patch_gateway_token_in_json(cname, uid, gid, home, cfg_dir, gateway_token)
+        # Patch gateway.auth.token into openclaw.json so openclaw itself can read
+        # the token.  openclaw onboard may rewrite this file, so we re-patch after
+        # onboard as well (_patch_gateway_token_in_json).
+        self._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
 
         # Now enable the service (drop-in is in place, safe to start)
         container_exec(
@@ -251,15 +211,13 @@ class OpenclawInstaller:
         )
 
     def _run_onboard(
-        self, cname: str, uid: int, gid: int, home: str, cfg_dir, gateway_token: str
+        self, cname: str, uid: int, gid: int, home: str, gateway_token: str
     ):
         """Start the gateway, pair the CLI device, then let systemd manage the service."""
         env = {
             "HOME": home,
             "XDG_RUNTIME_DIR": f"/run/user/{uid}",
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-            "OPENCLAW_STATE_DIR": str(cfg_dir),
-            "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
             "OPENCLAW_GATEWAY_TOKEN": gateway_token,
         }
 
@@ -322,14 +280,13 @@ systemctl --user start openclaw-gateway 2>/dev/null || true
         except Exception:
             return None
 
-    def _write_onboard_wrapper(self, cname: str, cfg_dir):
+    def _write_onboard_wrapper(self, cname: str, home: str):
         """Append a shell function that skips provider re-selection when a config exists."""
-        config_file = cfg_dir / "openclaw.json"
         snippet = f"""
 # ailab: skip provider re-selection when config exists (mirrors ubuclaw).
 # Gateway service is pre-installed as root by ailab installer.
 openclaw() {{
-  if [ "${{1:-}}" = "onboard" ] && [ -f "{config_file}" ]; then
+  if [ "${{1:-}}" = "onboard" ] && [ -f "{home}/.openclaw/openclaw.json" ]; then
     shift
     command openclaw onboard --auth-choice skip "$@"
   else
@@ -343,17 +300,13 @@ openclaw() {{
             stdin=snippet.encode(),
         )
 
-    def _install_shell_completion(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
+    def _install_shell_completion(self, cname: str, uid: int, gid: int, home: str):
         """Install openclaw bash completion system-wide in the container."""
         exit_code, stdout, _ = container_exec(
             cname,
             ["bash", "-lc", "openclaw completion --shell bash"],
             uid=uid, gid=gid,
-            env={
-                "HOME": home,
-                "OPENCLAW_STATE_DIR": str(cfg_dir),
-                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
-            },
+            env={"HOME": home},
             check=False,
         )
         if exit_code != 0 or not stdout.strip():
@@ -396,7 +349,7 @@ openclaw() {{
                     else:
                         print(f"  Warning: port {port} already in use on host, skipping proxy device '{device_name}'")
 
-    def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
+    def _run_setup(self, cname: str, uid: int, gid: int, home: str):
         """Push and run the Node.js setup script inside the container."""
         with importlib.resources.files("ailab.scripts").joinpath("setup_openclaw.js").open("rb") as f:
             script_content = f.read()
@@ -407,9 +360,5 @@ openclaw() {{
             cname,
             ["node", "/tmp/setup_openclaw.js"],
             uid=uid, gid=gid,
-            env={
-                "HOME": home,
-                "OPENCLAW_STATE_DIR": str(cfg_dir),
-                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
-            },
+            env={"HOME": home},
         )
