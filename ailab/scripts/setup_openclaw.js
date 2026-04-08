@@ -206,11 +206,24 @@ async function main() {
     maxTokens:     8192,
   }));
 
+  // Read existing config so we can preserve the gateway section written by
+  // openclaw onboard (it contains device auth and scope settings that must
+  // survive across restarts).  We only own the models and agents sections.
+  let existing = {};
+  try {
+    existing = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch {
+    // No existing config — start fresh with a baseline gateway block.
+    existing = {
+      gateway: {
+        mode: 'local',
+        auth: { mode: 'token' },
+      },
+    };
+  }
+
   const config = {
-    gateway: {
-      mode: 'local',
-      auth: { mode: 'token' },
-    },
+    ...existing,
     models: {
       // 'replace' mode: only the explicitly listed providers are available.
       // This disables all cloud providers (OpenAI, Anthropic, etc.) by default.

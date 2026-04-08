@@ -39,7 +39,7 @@ class NullclawInstaller:
 
         cfg_dir = container_config_dir(container_name, home) / "nullclaw"
         cfg_dir.mkdir(parents=True, exist_ok=True)
-        container_exec(cname, ["chown", "-R", f"{uid}:{gid}", str(cfg_dir)])
+        container_exec(cname, ["chown", "-R", f"{uid}:{gid}", str(cfg_dir)], check=False)
 
         print("Installing nullclaw (downloading binary from GitHub releases)...")
         self._install_binary(cname, uid)

@@ -693,10 +693,10 @@ def ensure_ailab_project():
         admin.projects.get(AILAB_PROJECT)
     except pylxd.exceptions.NotFound:
         print(f"Creating LXD project '{AILAB_PROJECT}'...")
-        admin.projects.create({
-            "name": AILAB_PROJECT,
-            "config": {"features.images": "false"},
-        })
+        admin.projects.create(
+            AILAB_PROJECT,
+            config={"features.images": "false"},
+        )
 
     profile_config = {"security.nesting": "true"}
     devices = _default_profile_devices()
@@ -708,11 +708,11 @@ def ensure_ailab_project():
         profile.save()
     except pylxd.exceptions.NotFound:
         print(f"Creating LXD profile '{AILAB_PROJECT}'...")
-        client.profiles.create({
-            "name": AILAB_PROJECT,
-            "config": profile_config,
-            "devices": devices,
-        })
+        client.profiles.create(
+            AILAB_PROJECT,
+            config=profile_config,
+            devices=devices,
+        )
 
 
 # ── Container creation ────────────────────────────────────────────────────────
