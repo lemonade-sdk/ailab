@@ -61,9 +61,6 @@ class OpenclawInstaller:
         self._write_onboard_wrapper(cname, home)
         self._install_shell_completion(cname, uid, gid, home)
 
-        print("Configuring openclaw (probing downloaded lemonade models via /api/v1/models)...")
-        self._run_setup(cname, uid, gid, home)
-
         print("Pairing openclaw gateway device (generating access token)...")
         gateway_token = self._generate_gateway_token(uid)
         # Write token to a host-side path so the web UI can read it without
@@ -71,7 +68,12 @@ class OpenclawInstaller:
         self._write_host_token(container_name, uid, gid, home, gateway_token)
         self._configure_gateway_env(cname, uid, gid, home, gateway_token)
         self._run_onboard(cname, uid, gid, home, gateway_token)
-        # Re-patch after onboard in case openclaw rewrote openclaw.json
+
+        # Run provider setup AFTER onboard so openclaw's rewrite of
+        # openclaw.json during onboard doesn't discard the lemonade config.
+        print("Configuring openclaw (probing downloaded lemonade models via /api/v1/models)...")
+        self._run_setup(cname, uid, gid, home)
+        # Re-patch token after setup_openclaw.js rewrites openclaw.json
         self._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
 
         print()
