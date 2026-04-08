@@ -170,19 +170,23 @@ def _sse_stream(task_fn):
     """
     async def generate():
         queue: asyncio.Queue[dict] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
         old_stdout = sys.stdout
 
         class SSECapture(io.TextIOBase):
             def write(self, s):
                 if s.strip():
-                    queue.put_nowait({"type": "log", "msg": s.rstrip()})
+                    # Must use call_soon_threadsafe: write() is called from a
+                    # thread-pool worker, but asyncio.Queue is not thread-safe.
+                    loop.call_soon_threadsafe(
+                        queue.put_nowait, {"type": "log", "msg": s.rstrip()}
+                    )
                 return len(s)
 
         sys.stdout = SSECapture()
 
         async def run_task():
             try:
-                loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, task_fn)
                 await queue.put({"type": "done"})
             except Exception as exc:
@@ -193,7 +197,13 @@ def _sse_stream(task_fn):
         asyncio.create_task(run_task())
 
         while True:
-            event = await queue.get()
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=20)
+            except asyncio.TimeoutError:
+                # Send a keepalive comment so the browser doesn't close the
+                # connection during long silent operations (e.g. npm install).
+                yield ": keepalive\n\n"
+                continue
             yield f"data: {json.dumps(event)}\n\n"
             if event["type"] in ("done", "error"):
                 break

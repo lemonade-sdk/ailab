@@ -80,7 +80,7 @@ class OpenclawInstaller:
         self._write_onboard_wrapper(cname, cfg_dir)
         self._install_shell_completion(cname, uid, gid, home, cfg_dir)
 
-        print("Configuring openclaw (probing lemonade via Ollama API)...")
+        print("Configuring openclaw (probing downloaded lemonade models via /api/v1/models)...")
         self._run_setup(cname, uid, gid, home, cfg_dir)
 
         print("Pairing openclaw gateway device (generating access token)...")
@@ -171,6 +171,32 @@ class OpenclawInstaller:
             ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
             stdin=snippet.encode(),
         )
+        # Write gateway.auth.token directly into openclaw.json so the dashboard
+        # URL can be constructed even if openclaw onboard doesn't write the token.
+        # Done via container_exec so it runs as the container user (who owns the file).
+        patch_py = (
+            "import json\n"
+            f"p = '{cfg_dir}/openclaw.json'\n"
+            "try:\n"
+            "    d = json.loads(open(p).read())\n"
+            "except Exception:\n"
+            "    d = {}\n"
+            f"d.setdefault('gateway', {{}}).setdefault('auth', {{}})['token'] = '{gateway_token}'\n"
+            "open(p, 'w').write(json.dumps(d, indent=2) + '\\n')\n"
+        )
+        container_exec(
+            cname,
+            ["python3"],
+            uid=uid, gid=gid,
+            stdin=patch_py.encode(),
+            env={
+                "HOME": home,
+                "OPENCLAW_STATE_DIR": str(cfg_dir),
+                "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+            },
+            check=False,
+        )
+
         # Now enable the service (drop-in is in place, safe to start)
         container_exec(
             cname,
@@ -196,6 +222,7 @@ class OpenclawInstaller:
             "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
             "OPENCLAW_STATE_DIR": str(cfg_dir),
             "OPENCLAW_CONFIG_PATH": str(cfg_dir / "openclaw.json"),
+            "OPENCLAW_GATEWAY_TOKEN": gateway_token,
         }
 
         # Start gateway in background, run onboard, then let systemd take over — all in one shell
@@ -211,7 +238,14 @@ openclaw gateway run --port {OPENCLAW_GATEWAY_PORT} \
     --token {gateway_token} \
     --allow-unconfigured > /tmp/ailab-gw-onboard.log 2>&1 &
 GWAY_PID=$!
-sleep 5
+
+# Wait up to 15s for the gateway to become ready
+for i in $(seq 1 15); do
+    if curl -fsS --max-time 1 http://127.0.0.1:{OPENCLAW_GATEWAY_PORT}/health >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
 
 # Pair the CLI device
 openclaw onboard \
@@ -219,7 +253,12 @@ openclaw onboard \
     --mode local --auth-choice skip \
     --gateway-auth token --gateway-token {gateway_token} \
     --gateway-bind loopback --gateway-port {OPENCLAW_GATEWAY_PORT} \
-    --skip-daemon --skip-channels --skip-search --skip-skills --skip-ui 2>&1 || true
+    --skip-daemon --skip-channels --skip-search --skip-skills --skip-ui 2>&1
+ONBOARD_EXIT=$?
+if [ $ONBOARD_EXIT -ne 0 ]; then
+    echo "Warning: openclaw onboard exited with code $ONBOARD_EXIT (gateway log follows)"
+    cat /tmp/ailab-gw-onboard.log || true
+fi
 
 # Stop the temporary gateway
 kill $GWAY_PID 2>/dev/null || true
@@ -300,12 +339,24 @@ openclaw() {{
         """Add outbound proxies for all ports openclaw uses."""
         for device_name, port in OPENCLAW_PORTS:
             if not has_device(cname, device_name):
-                add_proxy_device(
+                ok = add_proxy_device(
                     cname, device_name,
                     f"tcp:127.0.0.1:{port}",
                     f"tcp:127.0.0.1:{port}",
                     bind="host",
                 )
+                if not ok:
+                    if port == OPENCLAW_GATEWAY_PORT:
+                        print(
+                            f"  Warning: port {port} is already in use on the host "
+                            f"(another openclaw gateway may be running). "
+                            f"The 'Open openclaw' button will not appear until port {port} "
+                            f"is free and the proxy device is added. "
+                            f"Stop the conflicting process and re-run: "
+                            f"ailab install <container> openclaw"
+                        )
+                    else:
+                        print(f"  Warning: port {port} already in use on host, skipping proxy device '{device_name}'")
 
     def _run_setup(self, cname: str, uid: int, gid: int, home: str, cfg_dir):
         """Push and run the Node.js setup script inside the container."""
