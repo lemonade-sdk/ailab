@@ -52,7 +52,7 @@ export function LogStream({ containerName, onClose }: Props) {
         </div>
         <pre
           ref={preRef}
-          className="flex-1 overflow-y-auto p-4 text-xs font-mono text-green-400 bg-slate-950 rounded-b-lg whitespace-pre-wrap break-all"
+          className="flex-1 overflow-y-auto p-4 text-xs font-mono text-green-400 bg-slate-900 rounded-b-lg whitespace-pre-wrap break-all"
         >
           {lines.join('\n')}
         </pre>

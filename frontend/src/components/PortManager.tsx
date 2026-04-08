@@ -80,7 +80,7 @@ export function PortManager({ containerName, onClose }: Props) {
                   <tr key={p.device} className="border-b border-slate-700/50">
                     <td className="py-2 font-mono text-xs">{p.device}</td>
                     <td className="py-2">
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${p.direction === 'outbound' ? 'bg-blue-900/50 text-blue-300' : 'bg-purple-900/50 text-purple-300'}`}>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${p.direction === 'outbound' ? 'bg-indigo-700/40 text-indigo-400' : 'bg-indigo-600/20 text-indigo-500'}`}>
                         {p.direction}
                       </span>
                     </td>

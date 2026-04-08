@@ -32,11 +32,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
-      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex items-center justify-between">
+      <header className="bg-slate-800 border-b border-slate-600 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <span className="text-2xl font-bold text-white">AI Lab</span>
-          <span className="text-slate-500 mx-2">-</span>
-          <span className="text-slate-400 text-sm">Your AI in a Box</span>
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <div className="flex flex-col leading-tight">
+            <span className="text-white font-medium text-base tracking-tight">AI Lab</span>
+            <span className="text-slate-400 text-xs font-light">Your AI in a Box</span>
+          </div>
         </div>
         <button
           onClick={() => setShowCreate(true)}

@@ -13,7 +13,7 @@ export function Terminal({ containerName, onClose }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const term = new XTerm({ cursorBlink: true, theme: { background: '#1a1b26' } });
+    const term = new XTerm({ cursorBlink: true, theme: { background: '#1a1d26' } });
     const fitAddon = new FitAddon();
     const linksAddon = new WebLinksAddon();
     term.loadAddon(fitAddon);
@@ -50,10 +50,10 @@ export function Terminal({ containerName, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-      <div className="bg-[#1a1b26] rounded-lg shadow-2xl w-[90vw] h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700">
-          <span className="text-gray-300 font-mono text-sm">{containerName} — shell</span>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-xl leading-none">×</button>
+      <div className="bg-slate-800 rounded-lg shadow-2xl w-[90vw] h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-slate-600">
+          <span className="text-slate-300 font-mono text-sm">{containerName} — shell</span>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-xl leading-none">×</button>
         </div>
         <div ref={divRef} className="flex-1 p-2 min-h-0" />
       </div>
