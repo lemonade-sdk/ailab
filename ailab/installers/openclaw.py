@@ -98,7 +98,8 @@ class OpenclawInstaller:
         print("  Launch:       openclaw")
         print(f"  Web UI:       http://localhost:18789/#token={gateway_token}")
         print()
-        print("  Lemonade is pre-configured via localhost proxy (port 8000).")
+        print("  Lemonade is pre-configured via localhost proxy (port 13305 or 8000).")
+        print("  Port 13305 is used for lemonade >= 10.1; port 8000 for older versions.")
         print("  Make sure lemonade-server is running on the host.")
 
     def _install_gateway_service(self, cname: str, uid: int, gid: int, home: str):

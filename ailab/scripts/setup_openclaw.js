@@ -18,8 +18,29 @@ const fs            = require('fs');
 const path          = require('path');
 const os            = require('os');
 
+// lemonade-server changed its default port from 8000 to 13305 in version 10.1.
+// Try the new port first; fall back to 8000 for older installations.
+const LEMONADE_PORTS = [13305, 8000];
+
+function detectLemonadePort() {
+  for (const port of LEMONADE_PORTS) {
+    const result = spawnSync('curl', [
+      '-fsS',
+      '--connect-timeout', '2',
+      '--max-time', '3',
+      `http://localhost:${port}/api/v1/models`,
+    ], { encoding: 'utf8', timeout: 4000 });
+    if (result.status === 0) {
+      return port;
+    }
+  }
+  // Neither port is reachable — default to the new port (>= 10.1).
+  return LEMONADE_PORTS[0];
+}
+
+const LEMONADE_PORT = detectLemonadePort();
 const LEMONADE = {
-  baseUrl: 'http://localhost:8000/api/v1',
+  baseUrl: `http://localhost:${LEMONADE_PORT}/api/v1`,
   apiKey:  'lemonade',
   api:     'openai-completions',
 };
@@ -119,6 +140,7 @@ function sortModelsForConfig(modelIds) {
 async function main() {
   console.log('ailab: configuring openclaw...');
 
+  console.log(`ailab: lemonade-server port detected: ${LEMONADE_PORT}`);
   const modelIds = probeDownloadedModels(LEMONADE.baseUrl);
   const downloadedIds = new Set(modelIds || []);
 
@@ -192,7 +214,7 @@ async function main() {
   console.log(`  primary: lemonade/${primaryModel}`);
   console.log('');
   console.log('  Provider: lemonade only');
-  console.log('  Lemonade → localhost:8000/api/v1 via OpenAI-compatible completions API (proxied from host)');
+  console.log(`  Lemonade → localhost:${LEMONADE_PORT}/api/v1 via OpenAI-compatible completions API (proxied from host)`);
   console.log('  All non-lemonade providers disabled (models.mode: replace)');
   console.log('  Web UI → http://localhost:18789 (accessible on host)');
 }
