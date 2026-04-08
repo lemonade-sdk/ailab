@@ -118,7 +118,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
             >
               <option value="">— none (bare container) —</option>
-              {packages.map((pkg) => (
+              {packages.filter((pkg) => !['nullclaw', 'picoclaw'].includes(pkg.name)).map((pkg) => (
                 <option key={pkg.name} value={pkg.name}>
                   {pkg.name} — {pkg.description}
                 </option>
