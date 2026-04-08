@@ -30,6 +30,16 @@ while keeping installed software isolated from the rest of your system.
 
 ## Installation
 
+### Add your user to the `lxd` group
+
+All installation methods require your user to be in the `lxd` group so
+the `ailab` CLI can talk to LXD without `sudo`:
+
+```bash
+sudo usermod -aG lxd $USER
+newgrp lxd   # apply without logging out, or log out and back in
+```
+
 ### Snap (recommended)
 
 ```bash
