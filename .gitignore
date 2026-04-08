@@ -1,4 +1,5 @@
 __pycache__/
+*.snap
 *.py[cod]
 *.egg-info/
 .venv/
