@@ -101,8 +101,9 @@ ailab run mybox               # open a shell
 Create a new sandbox container. This:
 - Launches an Ubuntu daily container in the `ailab` LXD project
 - Mounts your home directory at the same path inside the container
-- Sets up proxy devices so `localhost:8000` (lemonade) and `localhost:11434`
-  (ollama) inside the container reach the corresponding services on your host
+- Sets up proxy devices so `localhost:8000` / `localhost:13305` (lemonade)
+  and `localhost:11434` (ollama) inside the container reach the corresponding
+  services on your host
 - Forwards common web UI ports to your host browser
 - Pre-installs: python3, pip, nodejs, npm, bun, homebrew
 
@@ -111,9 +112,6 @@ ailab new mybox
 
 # Install a package immediately after creation (onboards and drops to shell)
 ailab new mybox --install openclaw
-
-# Multiple packages
-ailab new mybox --install openclaw --install nullclaw
 
 # With extra port forwarding
 ailab new mybox --port 5000:5000 --install openclaw
@@ -220,21 +218,24 @@ ailab port remove mybox 9000
 | Package | Status | Description |
 |---------|--------|-------------|
 | `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://localhost:18789`. |
-| `nullclaw` | Experimental | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://localhost:3000`. |
-| `picoclaw` | Experimental | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://localhost:18800`. |
+| `nullclaw` | Experimental (CLI only) | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://localhost:3000`. |
+| `picoclaw` | Experimental (CLI only) | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://localhost:18800`. |
 
-All packages use lemonade-server on `localhost:8000` as the primary provider
-via its OpenAI-compatible API, with cloud providers disabled. `nullclaw` and
-`picoclaw` also configure ollama on `localhost:11434` as a secondary provider.
+All packages use lemonade-server as the primary provider via its
+OpenAI-compatible API, with cloud providers disabled. lemonade-server is
+auto-detected on `localhost:13305` (>= 10.1) or `localhost:8000` (< 10.1).
+`nullclaw` and `picoclaw` also configure ollama on `localhost:11434` as a
+secondary provider.
 
 ## How It Works
 
 ```
 Your Host
-├── lemonade-server :8000
+├── lemonade-server :13305 (>= 10.1) or :8000 (< 10.1)
 ├── ollama          :11434
 └── ailab container (LXD)
-    ├── localhost:8000   →  host:8000   (lemonade, inbound proxy)
+    ├── localhost:13305  →  host:13305  (lemonade >= 10.1, inbound proxy)
+    ├── localhost:8000   →  host:8000   (lemonade < 10.1,  inbound proxy)
     ├── localhost:11434  →  host:11434  (ollama, inbound proxy)
     ├── host:7860        →  container:7860   (gradio)
     ├── host:8888        →  container:8888   (jupyter)
@@ -257,9 +258,9 @@ see them with `lxc --project ailab list`.
 at the same path using `raw.idmap` for correct UID/GID passthrough. Files you
 create inside the container appear on your host and vice versa.
 
-**Per-container config**: Each container that has packages installed gets its
-own config directory at `~/.local/share/ailab/containers/<name>/`. This means
-you can have two containers running the same tool with different configurations.
+**Per-container config**: Each container has an isolated home directory, so
+tool configs (e.g. `~/.openclaw/openclaw.json`) are automatically per-container.
+You can have two containers running the same tool with different configurations.
 
 **Security nesting**: Containers are created with `security.nesting=true`,
 which enables docker, fuse, and other tools that need kernel features inside
@@ -293,11 +294,10 @@ is freed.
 over REST, SSE (for live creation/install progress), and WebSockets
 (interactive terminal and log tail).
 
-**Multiple sandboxes**: Create separate containers for different projects or
-different AI tools:
+**Multiple sandboxes**: Create separate containers for different projects:
 ```bash
 ailab new coding --install openclaw
-ailab new experiments --install nullclaw
+ailab new experiments --install openclaw
 ```
 
 **Persistence**: Containers persist between reboots. LXD starts them
