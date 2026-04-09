@@ -356,7 +356,33 @@ function ContainerCard({
   );
 }
 
+function ConfirmModal({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-slate-800 rounded-xl border border-slate-700 w-full max-w-sm p-6 flex flex-col gap-5 shadow-2xl">
+        <p className="text-white text-sm">{message}</p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-red-400/80 rounded-lg transition-colors"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh, modelRefreshTick }: Props) {
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
   if (containers.length === 0) {
     return (
       <div className="text-center mt-24">
@@ -373,28 +399,37 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
     try { await stopContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
   };
   const handleDelete = async (name: string) => {
-    if (!confirm(`Delete container "${name}"?`)) return;
     try { await deleteContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    setConfirmDelete(null);
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {containers.map((c) => (
-        <ContainerCard
-          key={c.name}
-          container={c}
-          onShell={onShell}
-          onLogs={onLogs}
-          onPorts={onPorts}
-          onInstall={onInstall}
-          onChangeModel={onChangeModel}
-          onStart={handleStart}
-          onStop={handleStop}
-          onDelete={handleDelete}
-          modelRefreshTick={modelRefreshTick}
+    <>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {containers.map((c) => (
+          <ContainerCard
+            key={c.name}
+            container={c}
+            onShell={onShell}
+            onLogs={onLogs}
+            onPorts={onPorts}
+            onInstall={onInstall}
+            onChangeModel={onChangeModel}
+            onStart={handleStart}
+            onStop={handleStop}
+            onDelete={(name) => setConfirmDelete(name)}
+            modelRefreshTick={modelRefreshTick}
+          />
+        ))}
+      </div>
+      {confirmDelete && (
+        <ConfirmModal
+          message={`Delete container "${confirmDelete}"? This cannot be undone.`}
+          onConfirm={() => handleDelete(confirmDelete)}
+          onCancel={() => setConfirmDelete(null)}
         />
-      ))}
-    </div>
+      )}
+    </>
   );
 }
 
