@@ -80,9 +80,6 @@ class OpenclawInstaller:
         self._run_setup(cname, uid, gid, home)
         # Re-patch token after setup_openclaw.js rewrites openclaw.json
         self._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
-        # Restart gateway so it loads the updated config written by setup_openclaw.js.
-        print("Restarting openclaw gateway to apply clean config...")
-        self._restart_gateway(cname, uid, gid, home)
 
         print()
         print(f"openclaw installed in '{container_name}'.")
