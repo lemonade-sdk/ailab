@@ -212,7 +212,7 @@ examples:
     p_new.set_defaults(func=cmd_new)
 
     # ── run ────────────────────────────────────────────────────────────────────
-    p_run = sub.add_parser("run", help="Open a shell inside a sandbox")
+    p_run = sub.add_parser("run", help="Open a shell inside a sandbox", aliases=["shell"])
     p_run.add_argument("name", help="Sandbox name")
     p_run.set_defaults(func=cmd_run)
 

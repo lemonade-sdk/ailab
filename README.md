@@ -26,19 +26,8 @@ while keeping installed software isolated from the rest of your system.
 
 - Ubuntu 22.04 or later (Ubuntu 24.04 / 26.04 recommended)
 - [LXD](https://ubuntu.com/lxd) installed and initialised (`lxd init`)
-- Python 3.11 or later
 
 ## Installation
-
-### Add your user to the `lxd` group
-
-All installation methods require your user to be in the `lxd` group so
-the `ailab` CLI can talk to LXD without `sudo`:
-
-```bash
-sudo usermod -aG lxd $USER
-newgrp lxd   # apply without logging out, or log out and back in
-```
 
 ### Snap (recommended)
 
@@ -66,9 +55,16 @@ sudo add-apt-repository ppa:ken-vandine/ailab
 sudo apt install ailab
 ```
 
+Both PPA and source installs require your user to be in the `lxd` group:
+
+```bash
+sudo usermod -aG lxd $USER
+newgrp lxd   # apply without logging out, or log out and back in
+```
+
 ### From source
 
-Install LXD:
+Requires Python 3.11 or later. Install LXD:
 ```bash
 sudo snap install lxd
 sudo lxd init --auto
@@ -133,6 +129,7 @@ Start the container (if stopped) and open an interactive shell.
 
 ```bash
 ailab run mybox
+ailab shell mybox  # alias
 ```
 
 ### `ailab stop <name>`
@@ -158,6 +155,7 @@ Stop and permanently delete a container.
 
 ```bash
 ailab delete mybox
+ailab rm mybox        # alias
 ailab delete mybox --force   # skip confirmation
 ```
 

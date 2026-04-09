@@ -14,16 +14,23 @@ description: |
     ailab run mybox
     ailab list
 
-  Or start the web management interface:
+  Or use the web management interface — a browser-based dashboard with live
+  progress, an in-browser terminal, and log tailing. It runs as a background
+  daemon and is accessible at http://127.0.0.1:11500 by default.
+
+  Configure the host and port:
 
     snap set ailab web.host=0.0.0.0
     snap set ailab web.port=11500
 
-  The web service runs as a background daemon and is accessible at
-  http://HOST:PORT once started.
-
+license: GPL-3.0+
 grade: devel
 confinement: strict
+
+contact: https://github.com/kenvandine/ai-dev-box/issues
+issues: https://github.com/kenvandine/ai-dev-box/issues
+source-code: https://github.com/kenvandine/ai-dev-box
+website: https://github.com/kenvandine/ai-dev-box
 
 apps:
   ailab:
