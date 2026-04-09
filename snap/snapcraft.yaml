@@ -59,6 +59,8 @@ parts:
   ailab:
     plugin: python
     source: .
+    build-packages:
+      - git
     python-packages:
       - pylxd>=2.4.0
       - fastapi>=0.110.0
