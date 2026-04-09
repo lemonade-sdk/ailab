@@ -1,6 +1,6 @@
 name: ailab
+adopt-info: ailab
 base: core24
-version: git
 summary: LXD-based sandboxes for running AI tools safely on Ubuntu
 description: |
   AI Lab creates lightweight LXD containers pre-wired to use AI services
@@ -66,6 +66,13 @@ parts:
       - aiohttp>=3.9.0
     after:
       - frontend
+    override-pull: |
+      craftctl default
+      VERSION=$(craftctl get version)
+      if [ -z $VERSION ]; then
+        VERSION=$(git describe --tags --abbrev=10)
+        craftctl set version=$VERSION
+      fi
     override-build: |
       mkdir -p $SNAPCRAFT_PART_BUILD/ailab/web/static
       cp -r $SNAPCRAFT_STAGE/web-static/. $SNAPCRAFT_PART_BUILD/ailab/web/static/
