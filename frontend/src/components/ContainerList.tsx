@@ -285,21 +285,21 @@ function ContainerCard({
         {running ? (
           <button
             onClick={() => onStop(c.name)}
-            className="flex-1 min-w-[4rem] bg-amber-800/60 hover:bg-amber-700/80 text-amber-200 text-xs py-1.5 px-2 rounded transition-colors"
+            className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-amber-300/80 text-xs py-1.5 px-2 rounded transition-colors"
           >
             Stop
           </button>
         ) : (
           <button
             onClick={() => onStart(c.name)}
-            className="flex-1 min-w-[4rem] bg-green-800/60 hover:bg-green-700/80 text-green-200 text-xs py-1.5 px-2 rounded transition-colors"
+            className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-green-400/80 text-xs py-1.5 px-2 rounded transition-colors"
           >
             Start
           </button>
         )}
         <button
           onClick={() => onDelete(c.name)}
-          className="flex-1 min-w-[4rem] bg-red-900/60 hover:bg-red-800/80 text-red-200 text-xs py-1.5 px-2 rounded transition-colors"
+          className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-red-400/80 text-xs py-1.5 px-2 rounded transition-colors"
         >
           Delete
         </button>
