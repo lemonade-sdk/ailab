@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { LemonadeRecipe, Package, SSEEvent, SystemUser } from '../types';
-import { createContainerStream, getLemonadeRecipes, getPackages, getUsers, importRecipeStream } from '../api/client';
+import { createContainerStream, getLemonadeDownloadedModels, getLemonadeRecipes, getPackages, getUsers, importRecipeStream } from '../api/client';
 
 interface Props {
   onClose: () => void;
@@ -29,6 +29,7 @@ export function CreateModal({ onClose, onDone }: Props) {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
   const [recipes, setRecipes] = useState<LemonadeRecipe[]>([]);
+  const [downloadedModels, setDownloadedModels] = useState<Set<string>>(new Set());
   const [recipesLoading, setRecipesLoading] = useState(false);
   const [recipesError, setRecipesError] = useState('');
   // null = auto-detect (no recipe selected)
@@ -58,8 +59,12 @@ export function CreateModal({ onClose, onDone }: Props) {
     if (selectedPackage !== 'openclaw') return;
     setRecipesLoading(true);
     setRecipesError('');
-    getLemonadeRecipes()
-      .then((r) => { setRecipes(r); setRecipesLoading(false); })
+    Promise.all([getLemonadeRecipes(), getLemonadeDownloadedModels()])
+      .then(([r, downloaded]) => {
+        setRecipes(r);
+        setDownloadedModels(new Set(downloaded));
+        setRecipesLoading(false);
+      })
       .catch((e) => { setRecipesError(String(e)); setRecipesLoading(false); });
   }, [selectedPackage]);
 
@@ -204,6 +209,7 @@ export function CreateModal({ onClose, onDone }: Props) {
 
                   {recipes.map((recipe) => {
                     const isSelected = selectedRecipe?._name === recipe._name;
+                    const isDownloaded = recipe.model_name ? downloadedModels.has(recipe.model_name) : false;
                     const visibleLabels = (recipe.labels ?? []).filter((l) => VISIBLE_LABELS.has(l));
                     return (
                       <label
@@ -219,7 +225,14 @@ export function CreateModal({ onClose, onDone }: Props) {
                           className="mt-0.5 accent-indigo-500"
                         />
                         <div className="flex-1 min-w-0">
-                          <div className="text-white text-sm font-medium">{recipe._name}</div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-white text-sm font-medium">{recipe._name}</span>
+                            {isDownloaded && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-teal-900 text-teal-300 font-medium">
+                                downloaded
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             {recipe.size != null && (
                               <span className="text-slate-400 text-xs">{recipe.size} GB</span>
