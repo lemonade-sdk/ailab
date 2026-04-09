@@ -27,6 +27,7 @@ export function CreateModal({ onClose, onDone }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string>('');
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<string>('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
   const [recipes, setRecipes] = useState<LemonadeRecipe[]>([]);
   const [downloadedModels, setDownloadedModels] = useState<Set<string>>(new Set());
@@ -239,35 +240,49 @@ export function CreateModal({ onClose, onDone }: Props) {
             </div>
           )}
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-sm text-slate-300">Extra ports (HOST:CONTAINER)</label>
-              <button
-                onClick={addPortRow}
-                disabled={running}
-                className="text-xs text-lemon-500 hover:text-lemon-400 disabled:opacity-50"
-              >
-                + Add port
-              </button>
-            </div>
-            {extraPorts.map((p, i) => (
-              <div key={i} className="flex gap-2 mb-2">
-                <input
-                  value={p.host}
-                  onChange={(e) => updatePort(i, 'host', e.target.value)}
-                  placeholder="Host port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
-                />
-                <span className="text-slate-500 self-center">:</span>
-                <input
-                  value={p.container}
-                  onChange={(e) => updatePort(i, 'container', e.target.value)}
-                  placeholder="Container port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
-                />
-                <button onClick={() => removePortRow(i)} className="text-slate-500 hover:text-red-400 px-1">✕</button>
+          <div className="border-t border-slate-700 pt-2">
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <svg className={`w-3 h-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              Advanced
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm text-slate-300">Extra ports (HOST:CONTAINER)</label>
+                  <button
+                    onClick={addPortRow}
+                    disabled={running}
+                    className="text-xs text-lemon-500 hover:text-lemon-400 disabled:opacity-50"
+                  >
+                    + Add port
+                  </button>
+                </div>
+                {extraPorts.map((p, i) => (
+                  <div key={i} className="flex gap-2 mb-2">
+                    <input
+                      value={p.host}
+                      onChange={(e) => updatePort(i, 'host', e.target.value)}
+                      placeholder="Host port"
+                      className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
+                    />
+                    <span className="text-slate-500 self-center">:</span>
+                    <input
+                      value={p.container}
+                      onChange={(e) => updatePort(i, 'container', e.target.value)}
+                      placeholder="Container port"
+                      className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
+                    />
+                    <button onClick={() => removePortRow(i)} className="text-slate-500 hover:text-red-400 px-1">✕</button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
 
           {log && (
