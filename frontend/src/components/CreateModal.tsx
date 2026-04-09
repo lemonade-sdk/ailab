@@ -24,7 +24,7 @@ function RecipeTag({ label }: { label: string }) {
 export function CreateModal({ onClose, onDone }: Props) {
   const [name, setName] = useState('');
   const [packages, setPackages] = useState<Package[]>([]);
-  const [selectedPackage, setSelectedPackage] = useState<string>('openclaw');
+  const [selectedPackage, setSelectedPackage] = useState<string>('');
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
@@ -43,9 +43,6 @@ export function CreateModal({ onClose, onDone }: Props) {
   useEffect(() => {
     getPackages().then((pkgs) => {
       setPackages(pkgs);
-      if (!pkgs.find((p) => p.name === 'openclaw') && pkgs.length > 0) {
-        setSelectedPackage(pkgs[0].name);
-      }
     }).catch(console.error);
 
     getUsers().then((us) => {
