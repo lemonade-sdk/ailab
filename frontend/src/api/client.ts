@@ -128,6 +128,11 @@ export async function getLemonadeRecipes(): Promise<LemonadeRecipe[]> {
   return request<LemonadeRecipe[]>('/lemonade/recipes');
 }
 
+export async function getLemonadeDownloadedModels(): Promise<string[]> {
+  const { downloaded } = await request<{ downloaded: string[] }>('/lemonade/downloaded-models');
+  return downloaded;
+}
+
 export async function importRecipeStream(
   containerName: string,
   recipe: LemonadeRecipe,

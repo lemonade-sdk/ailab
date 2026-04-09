@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { LemonadeRecipe, SSEEvent } from '../types';
-import { getLemonadeRecipes, importRecipeStream } from '../api/client';
+import { getLemonadeDownloadedModels, getLemonadeRecipes, importRecipeStream } from '../api/client';
 
 interface Props {
   containerName: string;
@@ -31,6 +31,7 @@ function recipeNameFromModel(model: string): string {
 
 export function ChangeModelModal({ containerName, currentModel, onClose, onDone }: Props) {
   const [recipes, setRecipes] = useState<LemonadeRecipe[]>([]);
+  const [downloadedModels, setDownloadedModels] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState('');
   const [selectedRecipe, setSelectedRecipe] = useState<LemonadeRecipe | null>(null);
@@ -41,9 +42,13 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
   const logRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    getLemonadeRecipes()
-      .then((r) => {
+    Promise.all([
+      getLemonadeRecipes(),
+      getLemonadeDownloadedModels(),
+    ])
+      .then(([r, downloaded]) => {
         setRecipes(r);
+        setDownloadedModels(new Set(downloaded));
         // Pre-select the recipe that matches the current model.
         if (currentModel) {
           const bare = recipeNameFromModel(currentModel);
@@ -102,6 +107,7 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
               {recipes.map((recipe) => {
                 const isSelected = selectedRecipe?._name === recipe._name;
                 const isCurrent = recipe._name === currentBare;
+                const isDownloaded = recipe.model_name ? downloadedModels.has(recipe.model_name) : false;
                 const visibleLabels = (recipe.labels ?? []).filter((l) => VISIBLE_LABELS.has(l));
                 return (
                   <label
@@ -117,11 +123,16 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
                       className="mt-0.5 accent-indigo-500"
                     />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-white text-sm font-medium">{recipe._name}</span>
                         {isCurrent && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-green-900 text-green-300 font-medium">
                             current
+                          </span>
+                        )}
+                        {isDownloaded && !isCurrent && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-teal-900 text-teal-300 font-medium">
+                            downloaded
                           </span>
                         )}
                       </div>

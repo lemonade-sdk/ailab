@@ -541,6 +541,28 @@ async def api_openclaw_model(name: str):
         raise HTTPException(status_code=404, detail="openclaw not configured")
 
 
+@app.get("/api/lemonade/downloaded-models")
+async def api_lemonade_downloaded_models():
+    """Return a list of model IDs that are already downloaded in lemonade-server."""
+    def _fetch() -> list[str]:
+        port = _detect_lemonade_port()
+        if port is None:
+            return []
+        req = _urllib_request.Request(
+            f"http://127.0.0.1:{port}/api/v1/models",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with _urllib_request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            return [m["id"] for m in data.get("data", []) if m.get("id")]
+        except Exception as exc:
+            logger.warning("Could not fetch lemonade downloaded models: %s", exc)
+            return []
+
+    return {"downloaded": await asyncio.to_thread(_fetch)}
+
+
 @app.get("/api/lemonade/recipes")
 async def api_lemonade_recipes():
     """Fetch openclaw-recommended lemonade recipes from GitHub (cached 5 min)."""
