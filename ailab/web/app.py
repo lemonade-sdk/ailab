@@ -667,6 +667,32 @@ def _stream_lemonade_pull(resp, model_name: str) -> None:
             event_type = "message"
 
 
+def _lemonade_model_entry(m: dict) -> dict:
+    """Build an openclaw model config dict from a lemonade /api/v1/models entry."""
+    labels = m.get("labels") or []
+    ctx_size = (m.get("recipe_options") or {}).get("ctx_size", 32768)
+    return {
+        "id": m["id"],
+        "name": m["id"],
+        "reasoning": False,
+        "input": ["text", "image"] if "vision" in labels else ["text"],
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        "contextWindow": ctx_size,
+        "maxTokens": 8192,
+    }
+
+
+def _fetch_lemonade_models(port: int) -> list[dict]:
+    """Return openclaw model dicts for all models downloaded in lemonade-server."""
+    req = _urllib_request.Request(
+        f"http://127.0.0.1:{port}/api/v1/models",
+        headers={"Accept": "application/json"},
+    )
+    with _urllib_request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+    return [_lemonade_model_entry(m) for m in data.get("data", []) if m.get("id")]
+
+
 @app.post("/api/containers/{name}/openclaw/import-recipe")
 async def api_import_recipe(name: str, req: ImportRecipeRequest):
     """Import a lemonade recipe into lemonade-server and configure openclaw to use it."""
@@ -730,6 +756,34 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
         username, uid, gid, home = get_container_user(cname)
         openclaw_json_path = f"{home}/.openclaw/openclaw.json"
 
+        # Fetch all currently-downloaded models from lemonade so we can
+        # populate the full list in openclaw.
+        all_lemonade_models: list[dict] = []
+        if port is not None:
+            try:
+                all_lemonade_models = _fetch_lemonade_models(port)
+                print(f"  Found {len(all_lemonade_models)} downloaded model(s) in lemonade")
+            except Exception as e:
+                print(f"  Warning: could not enumerate lemonade models: {e}")
+
+        # Fall back to just the current recipe if lemonade wasn't reachable.
+        current_entry = {
+            "id": model_name,
+            "name": model_name,
+            "reasoning": False,
+            "input": ["text", "image"] if has_vision else ["text"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": ctx_size,
+            "maxTokens": 8192,
+        }
+        if not all_lemonade_models:
+            all_lemonade_models = [current_entry]
+        else:
+            # Ensure the newly-imported model is first (and not duplicated).
+            model_list = [m for m in all_lemonade_models if m["id"] != model_name]
+            model_list.insert(0, current_entry)
+            all_lemonade_models = model_list
+
         # Read current openclaw.json from inside the container, patch it on the
         # host, and write it back — avoids running a script inside the container.
         try:
@@ -738,28 +792,18 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
         except Exception:
             config = {"gateway": {"mode": "local", "auth": {"mode": "token"}}}
 
-        # Ensure models.mode and providers.lemonade are set correctly.
-        models_section = config.setdefault("models", {"mode": "replace"})
-        models_section.setdefault("mode", "replace")
-        providers = models_section.setdefault("providers", {})
-        lemon = providers.setdefault("lemonade", {})
-        lemon["baseUrl"] = f"http://localhost:{lemonade_port}/api/v1"
-        lemon["apiKey"] = "lemonade"
-        lemon["api"] = "openai-completions"
-
-        # Add model entry if not already listed.
-        model_list = lemon.setdefault("models", [])
-        existing_ids = {m["id"] for m in model_list if isinstance(m, dict) and "id" in m}
-        if model_name not in existing_ids:
-            model_list.insert(0, {
-                "id": model_name,
-                "name": model_name,
-                "reasoning": False,
-                "input": ["text", "image"] if has_vision else ["text"],
-                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-                "contextWindow": ctx_size,
-                "maxTokens": 8192,
-            })
+        # Set models section: mode=replace, lemonade provider only
+        # (replaces any pre-existing remote providers such as anthropic/openai).
+        models_section = config.setdefault("models", {})
+        models_section["mode"] = "replace"
+        models_section["providers"] = {
+            "lemonade": {
+                "baseUrl": f"http://127.0.0.1:{lemonade_port}/api/v1",
+                "apiKey": "lemonade",
+                "api": "openai-completions",
+                "models": all_lemonade_models,
+            }
+        }
 
         # Set as primary model.
         (
