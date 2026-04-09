@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Container } from '../types';
-import { startContainer, stopContainer, deleteContainer, getGatewayUrl, gatewayPairStream } from '../api/client';
+import { startContainer, stopContainer, deleteContainer, getGatewayUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
 import { SSEEvent } from '../types';
 
 interface Props {
@@ -9,10 +9,11 @@ interface Props {
   onLogs: (name: string) => void;
   onPorts: (name: string) => void;
   onInstall: (name: string) => void;
+  onChangeModel: (name: string, currentModel: string | null) => void;
   onRefresh: () => void;
 }
 
-// Known tool gateway ports — containers with these ports get an "Open" link.
+// Known tool gateway ports — containers with these ports have an app installed.
 const GATEWAY_PORTS: Record<number, string> = {
   18789: 'openclaw',
   3000:  'nullclaw',
@@ -21,6 +22,9 @@ const GATEWAY_PORTS: Record<number, string> = {
 
 // Ports that use token-based auth — URL fetched from API rather than constructed client-side.
 const TOKEN_AUTH_PORTS = new Set([18789]);
+
+// Port used by openclaw — used to detect whether to fetch the configured model.
+const OPENCLAW_PORT = 18789;
 
 function StatusBadge({ status }: { status: string }) {
   const isRunning = status.toLowerCase() === 'running';
@@ -49,7 +53,6 @@ function PairModal({ name, onClose, onPaired }: { name: string; onClose: () => v
       if (cancelled) return;
       if (event.type === 'log') {
         setLogs(prev => [...prev, event.msg ?? '']);
-        // Extract URL from the success log line
         const match = (event.msg ?? '').match(/http:\/\/localhost:\d+\/#token=\S+/);
         if (match) setPairedUrl(match[0]);
       } else if (event.type === 'done') {
@@ -125,18 +128,13 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
-    fetchUrl();
-  }, [name, port]);
+  useEffect(() => { fetchUrl(); }, [name, port]);
 
-  // While unpaired, poll every 5s so the button flips to "Open" automatically
-  // once an install or pair flow completes (without requiring a page refresh).
   useEffect(() => {
     if (!notPaired) return;
     const interval = setInterval(fetchUrl, 5000);
     return () => clearInterval(interval);
   }, [notPaired, name, port]);
-
 
   if (loading) {
     return (
@@ -189,7 +187,149 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
   );
 }
 
-export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onRefresh }: Props) {
+/** Strip "lemonade/" and "user." prefixes for display. */
+function displayModel(model: string): string {
+  return model.replace(/^lemonade\//, '').replace(/^user\./, '');
+}
+
+interface CardProps {
+  container: Container;
+  onShell: (name: string) => void;
+  onLogs: (name: string) => void;
+  onPorts: (name: string) => void;
+  onInstall: (name: string) => void;
+  onChangeModel: (name: string, currentModel: string | null) => void;
+  onStart: (name: string) => void;
+  onStop: (name: string) => void;
+  onDelete: (name: string) => void;
+}
+
+function ContainerCard({
+  container: c,
+  onShell, onLogs, onPorts, onInstall, onChangeModel,
+  onStart, onStop, onDelete,
+}: CardProps) {
+  const running = c.status.toLowerCase() === 'running';
+  const gateways = c.outbound_ports
+    .filter((p) => p in GATEWAY_PORTS)
+    .map((p) => ({ port: p, label: GATEWAY_PORTS[p] }));
+
+  const hasApp = gateways.length > 0;
+  const hasOpenclaw = c.outbound_ports.includes(OPENCLAW_PORT);
+
+  const [currentModel, setCurrentModel] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hasOpenclaw) return;
+    getOpenclawModel(c.name)
+      .then(({ model }) => setCurrentModel(model))
+      .catch(() => setCurrentModel(null));
+  }, [hasOpenclaw, c.name]);
+
+  return (
+    <div className="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="text-white font-semibold text-lg truncate">{c.name}</h3>
+        <StatusBadge status={c.status} />
+      </div>
+
+      <div className="text-sm text-slate-400 space-y-1">
+        <div><span className="text-slate-500">IPv4:</span> {c.ipv4 || '—'}</div>
+        <div className="flex flex-wrap gap-1 items-center">
+          <span className="text-slate-500">Ports:</span>
+          {c.outbound_ports.length === 0
+            ? <span>—</span>
+            : c.outbound_ports.map((p) => (
+              <span key={p} className="bg-slate-700 text-slate-300 text-xs px-1.5 py-0.5 rounded">
+                :{p}
+              </span>
+            ))}
+        </div>
+        {currentModel && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">Model:</span>
+            <span className="text-indigo-300 text-xs font-medium truncate" title={currentModel}>
+              {displayModel(currentModel)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {running && gateways.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {gateways.map(({ port, label }) => (
+            <GatewayButton key={port} name={c.name} port={port} label={label} />
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2 mt-auto pt-2 border-t border-slate-700">
+        {running && (
+          <button
+            onClick={() => onShell(c.name)}
+            className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+          >
+            Shell
+          </button>
+        )}
+        {running && (
+          <button
+            onClick={() => onLogs(c.name)}
+            className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+          >
+            Logs
+          </button>
+        )}
+        <button
+          onClick={() => onPorts(c.name)}
+          className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+        >
+          Ports
+        </button>
+        {running && (
+          hasApp ? (
+            <button
+              onClick={() => onChangeModel(c.name, currentModel)}
+              className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+            >
+              Change Model
+            </button>
+          ) : (
+            <button
+              onClick={() => onInstall(c.name)}
+              className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+            >
+              Install
+            </button>
+          )
+        )}
+        {running ? (
+          <button
+            onClick={() => onStop(c.name)}
+            className="flex-1 min-w-[4rem] bg-amber-800 hover:bg-amber-700 text-amber-100 text-xs py-1.5 px-2 rounded transition-colors"
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            onClick={() => onStart(c.name)}
+            className="flex-1 min-w-[4rem] bg-green-800 hover:bg-green-700 text-green-100 text-xs py-1.5 px-2 rounded transition-colors"
+          >
+            Start
+          </button>
+        )}
+        <button
+          onClick={() => onDelete(c.name)}
+          className="flex-1 min-w-[4rem] bg-red-900 hover:bg-red-800 text-red-100 text-xs py-1.5 px-2 rounded transition-colors"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh }: Props) {
   if (containers.length === 0) {
     return (
       <div className="text-center mt-24">
@@ -212,97 +352,20 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {containers.map((c) => {
-        const running = c.status.toLowerCase() === 'running';
-        const gateways = c.outbound_ports
-          .filter((p) => p in GATEWAY_PORTS)
-          .map((p) => ({ port: p, label: GATEWAY_PORTS[p] }));
-
-        return (
-          <div key={c.name} className="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-3">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="text-white font-semibold text-lg truncate">{c.name}</h3>
-              <StatusBadge status={c.status} />
-            </div>
-
-            <div className="text-sm text-slate-400 space-y-1">
-              <div><span className="text-slate-500">IPv4:</span> {c.ipv4 || '—'}</div>
-              <div className="flex flex-wrap gap-1 items-center">
-                <span className="text-slate-500">Ports:</span>
-                {c.outbound_ports.length === 0
-                  ? <span>—</span>
-                  : c.outbound_ports.map((p) => (
-                    <span key={p} className="bg-slate-700 text-slate-300 text-xs px-1.5 py-0.5 rounded">
-                      :{p}
-                    </span>
-                  ))}
-              </div>
-            </div>
-
-            {running && gateways.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {gateways.map(({ port, label }) => (
-                  <GatewayButton key={port} name={c.name} port={port} label={label} />
-                ))}
-              </div>
-            )}
-
-            <div className="flex flex-wrap gap-2 mt-auto pt-2 border-t border-slate-700">
-              {running && (
-                <button
-                  onClick={() => onShell(c.name)}
-                  className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-                >
-                  Shell
-                </button>
-              )}
-              {running && (
-                <button
-                  onClick={() => onLogs(c.name)}
-                  className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-                >
-                  Logs
-                </button>
-              )}
-              <button
-                onClick={() => onPorts(c.name)}
-                className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-              >
-                Ports
-              </button>
-              {running && (
-                <button
-                  onClick={() => onInstall(c.name)}
-                  className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-                >
-                  Install
-                </button>
-              )}
-              {running ? (
-                <button
-                  onClick={() => handleStop(c.name)}
-                  className="flex-1 min-w-[4rem] bg-amber-800 hover:bg-amber-700 text-amber-100 text-xs py-1.5 px-2 rounded transition-colors"
-                >
-                  Stop
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleStart(c.name)}
-                  className="flex-1 min-w-[4rem] bg-green-800 hover:bg-green-700 text-green-100 text-xs py-1.5 px-2 rounded transition-colors"
-                >
-                  Start
-                </button>
-              )}
-              <button
-                onClick={() => handleDelete(c.name)}
-                className="flex-1 min-w-[4rem] bg-red-900 hover:bg-red-800 text-red-100 text-xs py-1.5 px-2 rounded transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {containers.map((c) => (
+        <ContainerCard
+          key={c.name}
+          container={c}
+          onShell={onShell}
+          onLogs={onLogs}
+          onPorts={onPorts}
+          onInstall={onInstall}
+          onChangeModel={onChangeModel}
+          onStart={handleStart}
+          onStop={handleStop}
+          onDelete={handleDelete}
+        />
+      ))}
     </div>
   );
 }

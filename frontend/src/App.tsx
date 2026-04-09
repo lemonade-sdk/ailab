@@ -7,6 +7,7 @@ import { Terminal } from './components/Terminal';
 import { LogStream } from './components/LogStream';
 import { PortManager } from './components/PortManager';
 import { InstallModal } from './components/InstallModal';
+import { ChangeModelModal } from './components/ChangeModelModal';
 
 export default function App() {
   const [containers, setContainers] = useState<Container[]>([]);
@@ -15,6 +16,7 @@ export default function App() {
   const [logsContainer, setLogsContainer] = useState<string | null>(null);
   const [portsContainer, setPortsContainer] = useState<string | null>(null);
   const [installContainer, setInstallContainer] = useState<string | null>(null);
+  const [changeModelContainer, setChangeModelContainer] = useState<{ name: string; model: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = () => {
@@ -63,6 +65,7 @@ export default function App() {
             onLogs={setLogsContainer}
             onPorts={setPortsContainer}
             onInstall={setInstallContainer}
+            onChangeModel={(name, model) => setChangeModelContainer({ name, model })}
             onRefresh={refresh}
           />
         )}
@@ -88,6 +91,14 @@ export default function App() {
           containerName={installContainer}
           onClose={() => setInstallContainer(null)}
           onDone={() => { setInstallContainer(null); refresh(); }}
+        />
+      )}
+      {changeModelContainer && (
+        <ChangeModelModal
+          containerName={changeModelContainer.name}
+          currentModel={changeModelContainer.model}
+          onClose={() => setChangeModelContainer(null)}
+          onDone={() => { setChangeModelContainer(null); refresh(); }}
         />
       )}
     </div>

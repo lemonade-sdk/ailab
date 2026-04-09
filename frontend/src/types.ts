@@ -28,3 +28,18 @@ export type SSEEvent =
   | { type: 'log'; msg: string }
   | { type: 'done' }
   | { type: 'error'; msg: string };
+
+export interface LemonadeRecipe {
+  /** Internal: filename without .json, added by the backend */
+  _name: string;
+  model_name: string;
+  /** Single-checkpoint models */
+  checkpoint?: string;
+  /** Multi-checkpoint models (e.g. vision with mmproj) */
+  checkpoints?: { main: string; mmproj?: string };
+  labels?: string[];
+  recipe?: string;
+  recipe_options?: { ctx_size?: number };
+  /** Approximate disk size in GB */
+  size?: number;
+}

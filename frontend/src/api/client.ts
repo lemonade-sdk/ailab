@@ -1,4 +1,4 @@
-import { Container, Package, PortProxy, SSEEvent, SystemUser } from '../types';
+import { Container, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
 
 const BASE = '/api';
 
@@ -118,4 +118,24 @@ export async function installStream(
   onEvent: (event: SSEEvent) => void,
 ): Promise<void> {
   return streamSSE(`${BASE}/containers/${name}/install`, { package: pkg }, onEvent);
+}
+
+export async function getOpenclawModel(name: string): Promise<{ model: string }> {
+  return request<{ model: string }>(`/containers/${name}/openclaw/model`);
+}
+
+export async function getLemonadeRecipes(): Promise<LemonadeRecipe[]> {
+  return request<LemonadeRecipe[]>('/lemonade/recipes');
+}
+
+export async function importRecipeStream(
+  containerName: string,
+  recipe: LemonadeRecipe,
+  onEvent: (event: SSEEvent) => void,
+): Promise<void> {
+  return streamSSE(
+    `${BASE}/containers/${containerName}/openclaw/import-recipe`,
+    { recipe },
+    onEvent,
+  );
 }
