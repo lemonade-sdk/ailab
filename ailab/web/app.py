@@ -582,6 +582,69 @@ async def api_lemonade_recipes():
         raise HTTPException(status_code=502, detail=f"Failed to fetch recipes: {exc}")
 
 
+def _stream_lemonade_pull(resp, model_name: str) -> None:
+    """Read lemonade's SSE pull stream and print human-readable progress.
+
+    Lemonade emits named SSE events:
+      event: progress  data: {file, file_index, total_files, bytes_downloaded,
+                               bytes_total, percent, ...}
+      event: complete  data: {file, ..., percent: 100}  (or {status: "ok"})
+      event: error     data: {error: "message"}
+    """
+    event_type = "message"
+    last_pct: dict[str, float] = {}  # file -> last printed percent
+
+    while True:
+        line = resp.readline()
+        if not line:
+            break
+        line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+        if line.startswith("event: "):
+            event_type = line[7:].strip()
+        elif line.startswith("data: "):
+            data_str = line[6:]
+            try:
+                d = json.loads(data_str)
+            except Exception:
+                event_type = "message"
+                continue
+
+            if event_type == "progress":
+                pct = float(d.get("percent", 0))
+                fname = d.get("file", "")
+                fidx = d.get("file_index", 1)
+                ftotal = d.get("total_files", 1)
+                prev = last_pct.get(fname, -11.0)
+
+                if fname not in last_pct:
+                    print(f"  Downloading file {fidx}/{ftotal}: {fname}")
+
+                if pct - prev >= 10.0:
+                    last_pct[fname] = pct
+                    bdl = d.get("bytes_downloaded", 0)
+                    btot = d.get("bytes_total", 0)
+                    if btot > 0:
+                        mb_dl = bdl / (1024 * 1024)
+                        mb_tot = btot / (1024 * 1024)
+                        print(f"    {pct:.0f}%  ({mb_dl:.0f} / {mb_tot:.0f} MB)")
+                    else:
+                        print(f"    {pct:.0f}%")
+
+            elif event_type == "complete":
+                fname = d.get("file", "")
+                if fname:
+                    print(f"  Downloaded: {fname}")
+                else:
+                    print(f"  Model registered: {model_name}")
+
+            elif event_type == "error":
+                err = d.get("error", data_str)
+                print(f"  Warning: lemonade error: {err} (non-fatal)")
+
+            event_type = "message"
+
+
 @app.post("/api/containers/{name}/openclaw/import-recipe")
 async def api_import_recipe(name: str, req: ImportRecipeRequest):
     """Import a lemonade recipe into lemonade-server and configure openclaw to use it."""
@@ -621,10 +684,10 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
                 if field in recipe:
                     pull_data[field] = recipe[field]
 
-            print(f"  Registering {model_name} with lemonade-server and downloading...")
             size_gb = recipe.get("size")
-            if size_gb:
-                print(f"  Model size: ~{size_gb} GB — this may take a while")
+            size_str = f" (~{size_gb} GB)" if size_gb else ""
+            print(f"  Registering {model_name} with lemonade-server{size_str}...")
+            pull_data["stream"] = True
             try:
                 data = json.dumps(pull_data).encode()
                 http_req = _urllib_request.Request(
@@ -633,10 +696,8 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                # Use a long timeout — large model downloads can take many minutes.
                 with _urllib_request.urlopen(http_req, timeout=7200) as resp:
-                    result = json.loads(resp.read())
-                    print(f"  Model registered: {result.get('model_name', model_name)}")
+                    _stream_lemonade_pull(resp, model_name)
             except _urllib_error.HTTPError as e:
                 body = e.read().decode(errors="replace")
                 print(f"  Warning: lemonade pull returned {e.code}: {body} (non-fatal)")

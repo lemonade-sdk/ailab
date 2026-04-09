@@ -17,6 +17,7 @@ export default function App() {
   const [portsContainer, setPortsContainer] = useState<string | null>(null);
   const [installContainer, setInstallContainer] = useState<string | null>(null);
   const [changeModelContainer, setChangeModelContainer] = useState<{ name: string; model: string | null } | null>(null);
+  const [modelRefreshTick, setModelRefreshTick] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const refresh = () => {
@@ -67,6 +68,7 @@ export default function App() {
             onInstall={setInstallContainer}
             onChangeModel={(name, model) => setChangeModelContainer({ name, model })}
             onRefresh={refresh}
+            modelRefreshTick={modelRefreshTick}
           />
         )}
       </main>
@@ -98,7 +100,11 @@ export default function App() {
           containerName={changeModelContainer.name}
           currentModel={changeModelContainer.model}
           onClose={() => setChangeModelContainer(null)}
-          onDone={() => { setChangeModelContainer(null); refresh(); }}
+          onDone={() => {
+            setChangeModelContainer(null);
+            refresh();
+            setModelRefreshTick((t) => t + 1);
+          }}
         />
       )}
     </div>

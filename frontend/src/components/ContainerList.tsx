@@ -11,6 +11,7 @@ interface Props {
   onInstall: (name: string) => void;
   onChangeModel: (name: string, currentModel: string | null) => void;
   onRefresh: () => void;
+  modelRefreshTick: number;
 }
 
 // Known tool gateway ports — containers with these ports have an app installed.
@@ -202,12 +203,13 @@ interface CardProps {
   onStart: (name: string) => void;
   onStop: (name: string) => void;
   onDelete: (name: string) => void;
+  modelRefreshTick: number;
 }
 
 function ContainerCard({
   container: c,
   onShell, onLogs, onPorts, onInstall, onChangeModel,
-  onStart, onStop, onDelete,
+  onStart, onStop, onDelete, modelRefreshTick,
 }: CardProps) {
   const running = c.status.toLowerCase() === 'running';
   const gateways = c.outbound_ports
@@ -224,7 +226,7 @@ function ContainerCard({
     getOpenclawModel(c.name)
       .then(({ model }) => setCurrentModel(model))
       .catch(() => setCurrentModel(null));
-  }, [hasOpenclaw, c.name]);
+  }, [hasOpenclaw, c.name, modelRefreshTick]);
 
   return (
     <div className="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-3">
@@ -329,7 +331,7 @@ function ContainerCard({
   );
 }
 
-export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh }: Props) {
+export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh, modelRefreshTick }: Props) {
   if (containers.length === 0) {
     return (
       <div className="text-center mt-24">
@@ -364,6 +366,7 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
           onStart={handleStart}
           onStop={handleStop}
           onDelete={handleDelete}
+          modelRefreshTick={modelRefreshTick}
         />
       ))}
     </div>
