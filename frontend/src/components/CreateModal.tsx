@@ -139,7 +139,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               onChange={(e) => setName(e.target.value)}
               disabled={running}
               placeholder="mybox"
-              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
             />
           </div>
 
@@ -150,7 +150,7 @@ export function CreateModal({ onClose, onDone }: Props) {
                 value={selectedUser}
                 onChange={(e) => setSelectedUser(e.target.value)}
                 disabled={running}
-                className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+                className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
               >
                 <option value="">— select user —</option>
                 {users.map((u) => (
@@ -168,7 +168,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               value={selectedPackage}
               onChange={(e) => setSelectedPackage(e.target.value)}
               disabled={running}
-              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
             >
               <option value="">— none (bare container) —</option>
               {packages.filter((pkg) => !['nullclaw', 'picoclaw'].includes(pkg.name)).map((pkg) => (
@@ -190,14 +190,14 @@ export function CreateModal({ onClose, onDone }: Props) {
                 </p>
               ) : (
                 <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                  <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRecipe === null ? 'border-indigo-500 bg-indigo-950/40' : 'border-slate-600 hover:border-slate-500'}`}>
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRecipe === null ? 'border-lemon-500/60 bg-lemon-500/8' : 'border-slate-600 hover:border-slate-500'}`}>
                     <input
                       type="radio"
                       name="recipe"
                       checked={selectedRecipe === null}
                       onChange={() => setSelectedRecipe(null)}
                       disabled={running}
-                      className="mt-0.5 accent-indigo-500"
+                      className="mt-0.5 accent-lemon-500"
                     />
                     <div>
                       <div className="text-white text-sm font-medium">Auto-detect</div>
@@ -214,7 +214,7 @@ export function CreateModal({ onClose, onDone }: Props) {
                     return (
                       <label
                         key={recipe._name}
-                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-indigo-500 bg-indigo-950/40' : 'border-slate-600 hover:border-slate-500'}`}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-lemon-500/60 bg-lemon-500/8' : 'border-slate-600 hover:border-slate-500'}`}
                       >
                         <input
                           type="radio"
@@ -222,7 +222,7 @@ export function CreateModal({ onClose, onDone }: Props) {
                           checked={isSelected}
                           onChange={() => setSelectedRecipe(recipe)}
                           disabled={running}
-                          className="mt-0.5 accent-indigo-500"
+                          className="mt-0.5 accent-lemon-500"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -256,7 +256,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               <button
                 onClick={addPortRow}
                 disabled={running}
-                className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
+                className="text-xs text-lemon-500 hover:text-lemon-400 disabled:opacity-50"
               >
                 + Add port
               </button>
@@ -267,14 +267,14 @@ export function CreateModal({ onClose, onDone }: Props) {
                   value={p.host}
                   onChange={(e) => updatePort(i, 'host', e.target.value)}
                   placeholder="Host port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
                 />
                 <span className="text-slate-500 self-center">:</span>
                 <input
                   value={p.container}
                   onChange={(e) => updatePort(i, 'container', e.target.value)}
                   placeholder="Container port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
                 />
                 <button onClick={() => removePortRow(i)} className="text-slate-500 hover:text-red-400 px-1">✕</button>
               </div>
@@ -300,7 +300,7 @@ export function CreateModal({ onClose, onDone }: Props) {
           {done ? (
             <button
               onClick={onDone}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium"
+              className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
             >
               Done
             </button>
@@ -316,7 +316,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               <button
                 onClick={handleSubmit}
                 disabled={running || !name.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2 rounded-lg text-sm font-medium"
+                className="bg-lemon-500 hover:bg-lemon-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
               >
                 {running ? 'Creating…' : 'Create'}
               </button>

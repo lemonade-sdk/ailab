@@ -35,22 +35,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
-      <header className="bg-slate-800 border-b border-slate-600 px-6 py-3 flex items-center justify-between">
+      <header className="bg-slate-950 border-b border-slate-700 px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
-            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </div>
+          <svg className="w-8 h-8 shrink-0" viewBox="0 0 32 32" fill="none">
+            <ellipse cx="16" cy="17" rx="11" ry="12" fill="url(#lemon-body)" />
+            <path d="M16 5 Q18 2 21 3" stroke="#6aab2e" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+            <ellipse cx="16" cy="17" rx="11" ry="12" fill="none" stroke="#d4a800" strokeWidth="0.5" opacity="0.4" />
+            <defs>
+              <radialGradient id="lemon-body" cx="40%" cy="35%" r="65%">
+                <stop offset="0%" stopColor="#ffe580" />
+                <stop offset="60%" stopColor="#ffc832" />
+                <stop offset="100%" stopColor="#e6a800" />
+              </radialGradient>
+            </defs>
+          </svg>
           <div className="flex flex-col leading-tight">
-            <span className="text-white font-medium text-base tracking-tight">AI Lab</span>
+            <span className="text-white font-semibold text-base tracking-tight">AI Lab</span>
             <span className="text-slate-400 text-xs font-light">Your AI in a Box</span>
           </div>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
         >
           + New Container
         </button>

@@ -112,7 +112,7 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
                 return (
                   <label
                     key={recipe._name}
-                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-indigo-500 bg-indigo-950/40' : 'border-slate-600 hover:border-slate-500'}`}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-lemon-500/60 bg-lemon-500/8' : 'border-slate-600 hover:border-slate-500'}`}
                   >
                     <input
                       type="radio"
@@ -120,7 +120,7 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
                       checked={isSelected}
                       onChange={() => setSelectedRecipe(recipe)}
                       disabled={running}
-                      className="mt-0.5 accent-indigo-500"
+                      className="mt-0.5 accent-lemon-500"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -170,7 +170,7 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
           {done ? (
             <button
               onClick={onDone}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium"
+              className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
             >
               Done
             </button>
@@ -186,7 +186,7 @@ export function ChangeModelModal({ containerName, currentModel, onClose, onDone 
               <button
                 onClick={handleApply}
                 disabled={running || !selectedRecipe}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2 rounded-lg text-sm font-medium"
+                className="bg-lemon-500 hover:bg-lemon-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
               >
                 {running ? 'Applying…' : 'Apply'}
               </button>

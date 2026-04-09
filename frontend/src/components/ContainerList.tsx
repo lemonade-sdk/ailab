@@ -95,7 +95,7 @@ function PairModal({ name, onClose, onPaired }: { name: string; onClose: () => v
             Close
           </button>
           {done && pairedUrl && (
-            <button onClick={handleOpen} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm rounded transition-colors">
+            <button onClick={handleOpen} className="px-4 py-2 bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold text-sm rounded transition-colors">
               Open openclaw
             </button>
           )}
@@ -139,7 +139,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
 
   if (loading) {
     return (
-      <span className="inline-flex items-center bg-indigo-900/40 text-indigo-400 text-xs px-3 py-1.5 rounded">
+      <span className="inline-flex items-center justify-center w-full bg-slate-700/50 text-slate-400 text-xs px-3 py-2 rounded-lg">
         …
       </span>
     );
@@ -150,10 +150,10 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
       <>
         <button
           onClick={() => setShowPairModal(true)}
-          className="inline-flex items-center gap-1.5 bg-amber-800 hover:bg-amber-700 text-amber-100 text-xs font-medium px-3 py-1.5 rounded transition-colors"
+          className="inline-flex items-center justify-center gap-1.5 w-full bg-amber-800 hover:bg-amber-700 text-amber-100 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
           title="Gateway not paired — click to pair and open"
         >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -177,9 +177,9 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
       href={url ?? `http://localhost:${port}`}
       target="_blank"
       rel="noopener noreferrer"
-      className="inline-flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+      className="inline-flex items-center justify-center gap-2 w-full bg-lemon-500/15 hover:bg-lemon-500/25 border border-lemon-500/40 text-lemon-400 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
     >
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
           d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
       </svg>
@@ -220,6 +220,7 @@ function ContainerCard({
   const hasOpenclaw = c.outbound_ports.includes(OPENCLAW_PORT);
 
   const [currentModel, setCurrentModel] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     if (!hasOpenclaw) return;
@@ -229,43 +230,42 @@ function ContainerCard({
   }, [hasOpenclaw, c.name, modelRefreshTick]);
 
   return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-3">
+    <div className="bg-slate-800 rounded-xl border border-slate-700 p-5 flex flex-col gap-4">
+      {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-white font-semibold text-lg truncate">{c.name}</h3>
+        <h3 className="text-white font-semibold text-base truncate">{c.name}</h3>
         <StatusBadge status={c.status} />
       </div>
 
-      <div className="text-sm text-slate-400 space-y-1">
-        <div><span className="text-slate-500">IPv4:</span> {c.ipv4 || '—'}</div>
-        <div className="flex flex-wrap gap-1 items-center">
-          <span className="text-slate-500">Ports:</span>
-          {c.outbound_ports.length === 0
-            ? <span>—</span>
-            : c.outbound_ports.map((p) => (
-              <span key={p} className="bg-slate-700 text-slate-300 text-xs px-1.5 py-0.5 rounded">
-                :{p}
-              </span>
-            ))}
-        </div>
-        {currentModel && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-500">Model:</span>
-            <span className="text-indigo-300 text-xs font-medium truncate" title={currentModel}>
-              {displayModel(currentModel)}
-            </span>
-          </div>
-        )}
-      </div>
-
+      {/* Gateway open button */}
       {running && gateways.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-1.5">
           {gateways.map(({ port, label }) => (
             <GatewayButton key={port} name={c.name} port={port} label={label} />
           ))}
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2 mt-auto pt-2 border-t border-slate-700">
+      {/* Model row */}
+      {hasOpenclaw && currentModel && (
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-slate-500 text-xs shrink-0">Model</span>
+          <span className="text-lemon-400 text-xs font-medium truncate flex-1" title={currentModel}>
+            {displayModel(currentModel)}
+          </span>
+          {running && (
+            <button
+              onClick={() => onChangeModel(c.name, currentModel)}
+              className="shrink-0 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded transition-colors"
+            >
+              Change
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Primary actions */}
+      <div className="flex flex-wrap gap-2">
         {running && (
           <button
             onClick={() => onShell(c.name)}
@@ -274,58 +274,83 @@ function ContainerCard({
             Shell
           </button>
         )}
-        {running && (
+        {running && !hasApp && (
           <button
-            onClick={() => onLogs(c.name)}
-            className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
+            onClick={() => onInstall(c.name)}
+            className="flex-1 min-w-[4rem] bg-lemon-500/15 hover:bg-lemon-500/25 border border-lemon-500/40 text-lemon-400 text-xs py-1.5 px-2 rounded transition-colors"
           >
-            Logs
+            Install
           </button>
-        )}
-        <button
-          onClick={() => onPorts(c.name)}
-          className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-        >
-          Ports
-        </button>
-        {running && (
-          hasApp ? (
-            <button
-              onClick={() => onChangeModel(c.name, currentModel)}
-              className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-            >
-              Change Model
-            </button>
-          ) : (
-            <button
-              onClick={() => onInstall(c.name)}
-              className="flex-1 min-w-[4rem] bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-1.5 px-2 rounded transition-colors"
-            >
-              Install
-            </button>
-          )
         )}
         {running ? (
           <button
             onClick={() => onStop(c.name)}
-            className="flex-1 min-w-[4rem] bg-amber-800 hover:bg-amber-700 text-amber-100 text-xs py-1.5 px-2 rounded transition-colors"
+            className="flex-1 min-w-[4rem] bg-amber-800/60 hover:bg-amber-700/80 text-amber-200 text-xs py-1.5 px-2 rounded transition-colors"
           >
             Stop
           </button>
         ) : (
           <button
             onClick={() => onStart(c.name)}
-            className="flex-1 min-w-[4rem] bg-green-800 hover:bg-green-700 text-green-100 text-xs py-1.5 px-2 rounded transition-colors"
+            className="flex-1 min-w-[4rem] bg-green-800/60 hover:bg-green-700/80 text-green-200 text-xs py-1.5 px-2 rounded transition-colors"
           >
             Start
           </button>
         )}
         <button
           onClick={() => onDelete(c.name)}
-          className="flex-1 min-w-[4rem] bg-red-900 hover:bg-red-800 text-red-100 text-xs py-1.5 px-2 rounded transition-colors"
+          className="flex-1 min-w-[4rem] bg-red-900/60 hover:bg-red-800/80 text-red-200 text-xs py-1.5 px-2 rounded transition-colors"
         >
           Delete
         </button>
+      </div>
+
+      {/* Details expander */}
+      <div className="border-t border-slate-700 pt-2">
+        <button
+          onClick={() => setShowDetails((v) => !v)}
+          className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors w-full"
+        >
+          <svg
+            className={`w-3 h-3 transition-transform ${showDetails ? 'rotate-90' : ''}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+          Details
+        </button>
+
+        {showDetails && (
+          <div className="mt-2 space-y-2 text-xs text-slate-400">
+            <div><span className="text-slate-500">IPv4</span> <span className="ml-1">{c.ipv4 || '—'}</span></div>
+            {c.outbound_ports.length > 0 && (
+              <div className="flex flex-wrap gap-1 items-center">
+                <span className="text-slate-500">Ports</span>
+                {c.outbound_ports.map((p) => (
+                  <span key={p} className="bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">
+                    :{p}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2 pt-1">
+              {running && (
+                <button
+                  onClick={() => onLogs(c.name)}
+                  className="bg-slate-700 hover:bg-slate-600 text-slate-200 py-1 px-3 rounded transition-colors"
+                >
+                  Logs
+                </button>
+              )}
+              <button
+                onClick={() => onPorts(c.name)}
+                className="bg-slate-700 hover:bg-slate-600 text-slate-200 py-1 px-3 rounded transition-colors"
+              >
+                Ports
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -372,3 +397,4 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
     </div>
   );
 }
+
