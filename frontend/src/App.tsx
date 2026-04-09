@@ -51,7 +51,7 @@ export default function App() {
           </svg>
           <div className="flex flex-col leading-tight">
             <span className="text-white font-semibold text-base tracking-tight">AI Lab</span>
-            <span className="text-slate-400 text-xs font-light">Your AI in a Box</span>
+            <span className="text-slate-400 text-xs font-light">A box for your agents</span>
           </div>
         </div>
         <button
