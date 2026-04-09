@@ -190,15 +190,11 @@ export function CreateModal({ onClose, onDone }: Props) {
                 </p>
               ) : (
                 <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                  <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRecipe === null ? 'border-lemon-500/60 bg-lemon-500/8' : 'border-slate-600 hover:border-slate-500'}`}>
-                    <input
-                      type="radio"
-                      name="recipe"
-                      checked={selectedRecipe === null}
-                      onChange={() => setSelectedRecipe(null)}
-                      disabled={running}
-                      className="mt-0.5 accent-lemon-500"
-                    />
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRecipe === null ? 'border-lemon-500/60 bg-lemon-500/10' : 'border-slate-600 hover:border-slate-500'}`}>
+                    <input type="radio" name="recipe" checked={selectedRecipe === null} onChange={() => setSelectedRecipe(null)} disabled={running} className="sr-only" />
+                    <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${selectedRecipe === null ? 'border-lemon-500' : 'border-slate-500'}`}>
+                      {selectedRecipe === null && <div className="w-2 h-2 rounded-full bg-lemon-500" />}
+                    </div>
                     <div>
                       <div className="text-white text-sm font-medium">Auto-detect</div>
                       <div className="text-slate-400 text-xs mt-0.5">
@@ -214,16 +210,12 @@ export function CreateModal({ onClose, onDone }: Props) {
                     return (
                       <label
                         key={recipe._name}
-                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-lemon-500/60 bg-lemon-500/8' : 'border-slate-600 hover:border-slate-500'}`}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-lemon-500/60 bg-lemon-500/10' : 'border-slate-600 hover:border-slate-500'}`}
                       >
-                        <input
-                          type="radio"
-                          name="recipe"
-                          checked={isSelected}
-                          onChange={() => setSelectedRecipe(recipe)}
-                          disabled={running}
-                          className="mt-0.5 accent-lemon-500"
-                        />
+                        <input type="radio" name="recipe" checked={isSelected} onChange={() => setSelectedRecipe(recipe)} disabled={running} className="sr-only" />
+                        <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'border-lemon-500' : 'border-slate-500'}`}>
+                          {isSelected && <div className="w-2 h-2 rounded-full bg-lemon-500" />}
+                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-white text-sm font-medium">{recipe._name}</span>
