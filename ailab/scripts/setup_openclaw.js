@@ -2,14 +2,11 @@
 'use strict';
 // Writes an opinionated ~/.openclaw/openclaw.json that uses lemonade-server
 // via a custom "lemonade" provider that speaks the OpenAI-compatible
-// completions API on port 8000.
+// completions API.
 //
-// The openclaw config is intentionally limited to a single "lemonade"
-// provider so all cloud and alternate local providers are disabled.
-//
-// Ollama (port 11434) is intentionally omitted from the openclaw config to
-// avoid spurious discovery errors when it isn't running.  The port proxy
-// still exists on the container so other tools can reach it.
+// The lemonade provider is set as the primary model so it is the default
+// when opening a new chat.  Other built-in cloud providers remain visible
+// but lemonade is pre-selected and ready to use without any API keys.
 //
 // Adapted from ubuclaw/snap/local/bin/setup-providers.js.
 
@@ -225,9 +222,6 @@ async function main() {
   const config = {
     ...existing,
     models: {
-      // 'replace' mode: only the explicitly listed providers are available.
-      // This disables all cloud providers (OpenAI, Anthropic, etc.) by default.
-      mode: 'replace',
       providers: {
         lemonade: {
           baseUrl: LEMONADE.baseUrl,
@@ -254,9 +248,8 @@ async function main() {
   console.log(`  config:  ${CONFIG_FILE}`);
   console.log(`  primary: lemonade/${primaryModel}`);
   console.log('');
-  console.log('  Provider: lemonade only');
+  console.log('  Provider: lemonade');
   console.log(`  Lemonade → localhost:${LEMONADE_PORT}/api/v1 via OpenAI-compatible completions API (proxied from host)`);
-  console.log('  All non-lemonade providers disabled (models.mode: replace)');
   console.log('  Web UI → http://localhost:18789 (accessible on host)');
 }
 
