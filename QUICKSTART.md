@@ -1,4 +1,4 @@
-# AI Lab Quickstart — Ubuntu 26.04
+# AI Lab Quickstart — Ubuntu
 
 ```bash
 # Install snaps
