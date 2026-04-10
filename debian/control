@@ -7,6 +7,7 @@ Build-Depends:
  dh-python,
  pybuild-plugin-pyproject,
  python3-all,
+ python3-pip,
  python3-setuptools,
  python3-setuptools-scm
 Standards-Version: 4.7.2
@@ -19,8 +20,13 @@ Depends:
  ${misc:Depends},
  ${python3:Depends},
  python3-aiohttp,
+ python3-cryptography,
+ python3-dateutil,
  python3-fastapi,
+ python3-requests,
+ python3-requests-toolbelt,
  python3-uvicorn,
+ python3-ws4py,
  snapd,
  util-linux-extra
 Description: LXD-based sandboxes for running AI tools safely on Ubuntu

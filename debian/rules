@@ -9,3 +9,13 @@ export SETUPTOOLS_SCM_PRETEND_VERSION := $(shell dpkg-parsechangelog -SVersion |
 
 %:
 	dh $@ --buildsystem=pybuild --with python3
+
+override_dh_auto_install:
+	dh_auto_install
+	pip3 install \
+		--target=debian/ailab/usr/lib/python3/dist-packages/ailab/_vendor \
+		--no-deps \
+		--no-build-isolation \
+		"pylxd>=2.4.0"
+
+override_dh_auto_test:
