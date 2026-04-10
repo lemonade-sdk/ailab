@@ -15,7 +15,8 @@ override_dh_auto_install:
 	pip3 install \
 		--target=debian/ailab/usr/lib/python3/dist-packages/ailab/_vendor \
 		--no-deps \
-		--no-build-isolation \
+		--no-index \
+		--find-links=vendor \
 		"pylxd>=2.4.0"
 
 override_dh_auto_test:
