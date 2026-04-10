@@ -24,13 +24,13 @@ description: |
     snap set ailab web.port=11500
 
 license: GPL-3.0+
-grade: devel
+grade: stable
 confinement: strict
 
-contact: https://github.com/kenvandine/ai-dev-box/issues
-issues: https://github.com/kenvandine/ai-dev-box/issues
-source-code: https://github.com/kenvandine/ai-dev-box
-website: https://github.com/kenvandine/ai-dev-box
+contact: https://github.com/lemonade-sdk/ailab/issues
+issues: https://github.com/lemonade-sdk/ailab/issues
+source-code: https://github.com/lemonade-sdk/ailab
+website: https://github.com/lemonade-sdk/ailab
 
 apps:
   ailab:

@@ -71,7 +71,7 @@ sudo lxd init --auto
 ```
 
 ```bash
-git clone https://github.com/kenvandine/ailab
+git clone https://github.com/lemonade-sdk/ailab
 cd ailab
 ./install.sh
 ```

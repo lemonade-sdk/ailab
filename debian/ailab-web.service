@@ -1,6 +1,6 @@
 [Unit]
 Description=AI Lab web management interface
-Documentation=https://github.com/kenvandine/ailab
+Documentation=https://github.com/lemonade-sdk/ailab
 After=network.target
 
 [Service]
