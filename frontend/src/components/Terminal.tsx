@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { wsUrl } from '../api/client';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -23,8 +24,7 @@ export function Terminal({ containerName, onClose }: Props) {
     let ws: WebSocket | null = null;
 
     function connectWs() {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${window.location.host}/api/ws/shell/${containerName}`);
+      ws = new WebSocket(wsUrl(`/api/ws/shell/${containerName}`));
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
