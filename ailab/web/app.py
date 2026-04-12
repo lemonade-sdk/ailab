@@ -468,11 +468,55 @@ async def api_port_base_url(request: Request):
     return {"base": _port_base_url(request)}
 
 
+def _ensure_gateway_cloud_origin_sync(
+    cname: str, home: str, uid: int, gid: int, hub_origin: str
+) -> None:
+    """Add hub_origin to gateway.controlUi.allowedOrigins in openclaw.json if absent.
+
+    The openclaw gateway rejects WebSocket connections whose Origin header is not
+    in allowedOrigins.  When the control-ui is opened through the cloud tunnel the
+    browser sends Origin: https://<hub> which is not localhost, so we must
+    explicitly permit it.  Restarts the gateway service after patching so the
+    new config takes effect immediately.
+    """
+    openclaw_json_path = f"{home}/.openclaw/openclaw.json"
+    try:
+        raw = pull_file(cname, openclaw_json_path)
+        config = json.loads(raw)
+    except Exception as exc:
+        logger.warning("Could not read openclaw.json in %s: %s", cname, exc)
+        return
+
+    origins: list = (
+        config.get("gateway", {})
+        .get("controlUi", {})
+        .get("allowedOrigins", [])
+    )
+    if hub_origin in origins:
+        return  # already configured, no restart needed
+
+    origins = list(origins)
+    origins.append(hub_origin)
+    config.setdefault("gateway", {}).setdefault("controlUi", {})["allowedOrigins"] = origins
+    try:
+        push_file(cname, openclaw_json_path, json.dumps(config, indent=2) + "\n")
+    except Exception as exc:
+        logger.warning("Could not write openclaw.json in %s: %s", cname, exc)
+        return
+
+    installer = OpenclawInstaller()
+    installer._restart_gateway(cname, uid, gid, home)
+    logger.info(
+        "Added %s to openclaw allowedOrigins and restarted gateway in %s",
+        hub_origin, cname,
+    )
+
+
 @app.get("/api/containers/{name}/gateway-url")
 async def api_gateway_url(name: str, request: Request):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
-    _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
+    username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
     token_dir = container_config_dir(name, home) / "openclaw"
     token = _read_gateway_token(token_dir)
     if not token:
@@ -487,6 +531,15 @@ async def api_gateway_url(name: str, request: Request):
         ws_base = port_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         gateway_ws = f"{ws_base}{OPENCLAW_WS_PATH}"
         params = _urllib_parse.urlencode({"token": token, "gatewayUrl": gateway_ws})
+        # Ensure the hub origin is whitelisted in the gateway's CORS config.
+        # Runs as a background task so the URL response is not delayed.
+        parsed = _urllib_parse.urlparse(tunnel_base)
+        hub_origin = f"{parsed.scheme}://{parsed.netloc}"
+        asyncio.create_task(
+            asyncio.to_thread(
+                _ensure_gateway_cloud_origin_sync, cname, home, uid, gid, hub_origin
+            )
+        )
         return {"url": f"{port_url}/#{params}"}
     return {"url": f"{port_url}/#token={token}"}
 
