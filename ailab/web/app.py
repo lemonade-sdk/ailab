@@ -15,6 +15,7 @@ from typing import Any
 import aiohttp
 import pylxd.exceptions
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -49,6 +50,7 @@ from ailab.installers.openclaw import (
     OPENCLAW_GATEWAY_PORT,
     OpenclawInstaller,
 )
+from ailab.cloud import CloudTunnelManager
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -75,7 +77,17 @@ def _detect_lemonade_port() -> int | None:
             pass
     return None
 
-app = FastAPI(title="ailab web interface")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    tunnel = CloudTunnelManager.from_env()
+    if tunnel:
+        await tunnel.start()
+    yield
+    if tunnel:
+        await tunnel.stop()
+
+
+app = FastAPI(title="ailab web interface", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
