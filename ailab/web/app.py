@@ -531,14 +531,13 @@ async def api_gateway_url(name: str, request: Request):
         ws_base = port_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         gateway_ws = f"{ws_base}{OPENCLAW_WS_PATH}"
         params = _urllib_parse.urlencode({"token": token, "gatewayUrl": gateway_ws})
-        # Ensure the hub origin is whitelisted in the gateway's CORS config.
-        # Runs as a background task so the URL response is not delayed.
+        # Ensure the hub origin is whitelisted in the gateway's CORS config
+        # before returning the URL — the gateway must be ready when the browser
+        # opens it, so we await rather than fire-and-forget.
         parsed = _urllib_parse.urlparse(tunnel_base)
         hub_origin = f"{parsed.scheme}://{parsed.netloc}"
-        asyncio.create_task(
-            asyncio.to_thread(
-                _ensure_gateway_cloud_origin_sync, cname, home, uid, gid, hub_origin
-            )
+        await asyncio.to_thread(
+            _ensure_gateway_cloud_origin_sync, cname, home, uid, gid, hub_origin
         )
         return {"url": f"{port_url}/#{params}"}
     return {"url": f"{port_url}/#token={token}"}
