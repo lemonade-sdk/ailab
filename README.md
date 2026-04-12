@@ -322,7 +322,8 @@ to the tunnel registered by the matching GitHub user.
 
 ### Quick setup
 
-**1. Deploy the hub** on a VPS. Full instructions are in the
+**1. Deploy the hub** on a VPS with a single snap install — Redis, Caddy
+(TLS), and the hub API are all bundled. Full instructions are in the
 [AI Lab Cloud README](https://github.com/lemonade-sdk/ailab-cloud).
 
 **2. Get your tunnel token.** Log in to your hub in a browser, then visit:
