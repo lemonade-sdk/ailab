@@ -8,16 +8,16 @@ const BASE = `${import.meta.env.BASE_URL}api`;
  * Construct an absolute WebSocket URL for `path` (e.g. '/api/ws/shell/mybox').
  *
  * Local:  ws://localhost:11500/api/ws/shell/mybox
- * Tunnel: wss://hub.example.com/d/framework:11500/ws/api/ws/shell/mybox
+ * Tunnel: wss://hub.example.com/d/framework:11500/api/ws/shell/mybox
  *
- * The hub's proxy route for path-based WebSocket is /d/{target}/ws/{path},
- * so we insert '/ws' after the device prefix when running behind the tunnel.
+ * The hub's WebSocket proxy route mirrors the HTTP route: /d/{target}/{path},
+ * so we just prefix with the device segment when running behind the tunnel.
  */
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const m = window.location.pathname.match(/^(\/d\/[^/]+)\//);
   if (m) {
-    return `${proto}//${window.location.host}${m[1]}/ws${path}`;
+    return `${proto}//${window.location.host}${m[1]}${path}`;
   }
   return `${proto}//${window.location.host}${path}`;
 }
