@@ -87,7 +87,7 @@ class CloudConfig:
         github_user = os.environ.get("AILAB_CLOUD_USER", "").strip()
         device_id = os.environ.get("AILAB_CLOUD_DEVICE", "").strip() or socket.gethostname()
         ports_raw = os.environ.get("AILAB_CLOUD_PORTS", "").strip()
-        ports = [int(p) for p in ports_raw.split(",") if p.strip().isdigit()] if ports_raw else []
+        ports = [int(p) for p in ports_raw.split(",") if p.strip().isdigit()] if ports_raw else [11500]
         return cls(
             host=host,
             token=token,
