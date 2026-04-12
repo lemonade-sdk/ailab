@@ -431,8 +431,31 @@ def _get_or_create_gateway_token(token_dir: Path) -> str:
     return _secrets.token_urlsafe(32)
 
 
+def _port_base_url(request: Request) -> str:
+    """Return the base used to construct port-specific URLs.
+
+    When the request came through the cloud tunnel the proxy injects
+    'X-Ailab-Tunnel-Base' (e.g. 'https://hub.example.com/d/mydevice').
+    Appending ':{port}' produces the correct tunnel URL for that port.
+    When accessed locally the header is absent and we fall back to
+    'http://localhost' so existing behaviour is unchanged.
+    """
+    tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
+    return tunnel_base if tunnel_base else "http://localhost"
+
+
+@app.get("/api/port-base-url")
+async def api_port_base_url(request: Request):
+    """Return the base URL the frontend should use to construct port-specific links.
+
+    Returns 'http://localhost' when accessed locally, or the tunnel proxy
+    base URL when accessed through the cloud.
+    """
+    return {"base": _port_base_url(request)}
+
+
 @app.get("/api/containers/{name}/gateway-url")
-async def api_gateway_url(name: str):
+async def api_gateway_url(name: str, request: Request):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
     _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
@@ -440,11 +463,12 @@ async def api_gateway_url(name: str):
     token = _read_gateway_token(token_dir)
     if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
-    return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
+    base = _port_base_url(request)
+    return {"url": f"{base}:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
 
 
 @app.post("/api/containers/{name}/gateway-pair")
-async def api_gateway_pair(name: str):
+async def api_gateway_pair(name: str, request: Request):
     """Run openclaw onboard inside the container to pair the gateway device."""
     cname = _container_name(name)
     status = await asyncio.to_thread(_container_status, cname)
@@ -458,6 +482,7 @@ async def api_gateway_pair(name: str):
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
     installer = OpenclawInstaller()
+    port_base = _port_base_url(request)
 
     def task():
         gateway_token = _get_or_create_gateway_token(token_dir)
@@ -486,7 +511,7 @@ async def api_gateway_pair(name: str):
 
         token = _read_gateway_token(token_dir)
         if token:
-            print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")
+            print(f"Paired! Dashboard: {port_base}:{OPENCLAW_GATEWAY_PORT}/#token={token}")
         else:
             print("Warning: pairing may not have succeeded — check container logs")
 
