@@ -8,6 +8,7 @@ import socket as _socket
 import sys
 import time as _time
 import urllib.error as _urllib_error
+import urllib.parse as _urllib_parse
 import urllib.request as _urllib_request
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ from ailab.container import (
 from ailab.installers import INSTALLERS, get_installer
 from ailab.installers.openclaw import (
     OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_WS_PATH,
     OpenclawInstaller,
 )
 from ailab.cloud import CloudTunnelManager
@@ -476,7 +478,17 @@ async def api_gateway_url(name: str, request: Request):
     if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
     base = _port_base_url(request)
-    return {"url": f"{base}:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
+    port_url = f"{base}:{OPENCLAW_GATEWAY_PORT}"
+    tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
+    if tunnel_base:
+        # When served through the cloud tunnel, openclaw's JS can't reach the
+        # stored ws://localhost:18789 gateway URL.  Pass gatewayUrl in the hash
+        # so the control-ui connects via the tunnel instead.
+        ws_base = port_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        gateway_ws = f"{ws_base}{OPENCLAW_WS_PATH}"
+        params = _urllib_parse.urlencode({"token": token, "gatewayUrl": gateway_ws})
+        return {"url": f"{port_url}/#{params}"}
+    return {"url": f"{port_url}/#token={token}"}
 
 
 @app.post("/api/containers/{name}/gateway-pair")
