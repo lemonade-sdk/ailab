@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { wsUrl } from '../api/client';
 
 interface Props {
   containerName: string;
@@ -11,8 +12,7 @@ export function LogStream({ containerName, onClose }: Props) {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/ws/logs/${containerName}`);
+    const ws = new WebSocket(wsUrl(`/api/ws/logs/${containerName}`));
     wsRef.current = ws;
 
     ws.onmessage = (e) => {
