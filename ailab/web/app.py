@@ -776,7 +776,7 @@ def _stream_lemonade_pull(resp, model_name: str) -> None:
 def _lemonade_model_entry(m: dict) -> dict:
     """Build an openclaw model config dict from a lemonade /api/v1/models entry."""
     labels = m.get("labels") or []
-    ctx_size = (m.get("recipe_options") or {}).get("ctx_size", 32768)
+    ctx_size = max((m.get("recipe_options") or {}).get("ctx_size", 32768) or 32768, 1)
     return {
         "id": m["id"],
         "name": m["id"],
@@ -809,7 +809,7 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
         model_name = recipe.get("model_name", "")
         recipe_label = recipe.get("_name", model_name)
         has_vision = "vision" in recipe.get("labels", [])
-        ctx_size = recipe.get("recipe_options", {}).get("ctx_size", 32768)
+        ctx_size = max(recipe.get("recipe_options", {}).get("ctx_size", 32768) or 32768, 1)
 
         print(f"Importing recipe: {recipe_label}")
 
