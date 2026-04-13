@@ -302,6 +302,10 @@ AI Lab Cloud lets you access your home containers from any browser, anywhere
 alongside the web daemon, opening an outbound connection to a hub you
 self-host on a VPS.
 
+Keep `ailab` and `ailab-cloud` in step when deploying tunnel-related changes.
+The client and hub are developed together, so protocol or registration changes
+should be rolled out as a matched pair.
+
 ### How it works
 
 ```
@@ -342,6 +346,9 @@ sudo snap set ailab cloud.device-id=myhome   # lowercase letters, digits, and hy
 sudo snap restart ailab.web
 ```
 
+`cloud.host` accepts either `cloud.example.com` or `https://cloud.example.com`,
+but the full URL is the recommended form.
+
 **4. Visit** `https://myhome.cloud.example.com` from any browser and log
 in with GitHub. The full AI Lab dashboard loads proxied through the tunnel,
 including the interactive terminal and all "Open …" buttons for installed
@@ -352,7 +359,7 @@ tools.
 | Setting | Description |
 |---|---|
 | `cloud.enabled` | Set to `true` to start the tunnel client (default: `false`) |
-| `cloud.host` | Hub URL, e.g. `https://cloud.example.com` |
+| `cloud.host` | Hub URL or hostname, e.g. `https://cloud.example.com` |
 | `cloud.user` | Your GitHub username (must match your hub login) |
 | `cloud.token` | Tunnel token from `/auth/tunnel-token` on the hub |
 | `cloud.device-id` | Short identifier for this machine; use lowercase letters, digits, and hyphens only |

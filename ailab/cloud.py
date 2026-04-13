@@ -56,6 +56,8 @@ import aiohttp
 logger = logging.getLogger("ailab.cloud")
 
 _DEVICE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_HEARTBEAT_INTERVAL = 30
+_REGISTER_TIMEOUT = 15
 
 # Reconnect delay: start at 2 s, double each attempt, cap at 60 s.
 _BACKOFF_BASE = 2
@@ -152,6 +154,28 @@ class CloudTunnelManager:
         self._ws_sessions: dict[str, aiohttp.ClientSession] = {}
         self._tunnel_ws: aiohttp.ClientWebSocketResponse | None = None
 
+    async def _await_registered(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        msg = await ws.receive(timeout=_REGISTER_TIMEOUT)
+
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            if msg.type == aiohttp.WSMsgType.ERROR and ws.exception():
+                raise RuntimeError(f"Tunnel registration failed: {ws.exception()}")
+            raise RuntimeError(
+                f"Tunnel registration failed before acknowledgement (type={msg.type})"
+            )
+
+        try:
+            envelope = json.loads(msg.data)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Tunnel registration returned non-JSON data") from exc
+
+        if envelope.get("type") != "registered":
+            raise RuntimeError(
+                f"Tunnel registration failed: unexpected message {envelope.get('type')!r}"
+            )
+
+        logger.info("Registered with hub as device '%s'", self._config.device_id)
+
     @classmethod
     def from_env(cls) -> "CloudTunnelManager | None":
         config = CloudConfig.from_env()
@@ -212,7 +236,10 @@ class CloudTunnelManager:
         connector = aiohttp.TCPConnector(ssl=cfg.secure)
         async with aiohttp.ClientSession(connector=connector) as session:
             logger.info("Connecting to hub at %s", cfg.ws_url)
-            async with session.ws_connect(cfg.ws_url) as ws:
+            async with session.ws_connect(
+                cfg.ws_url,
+                heartbeat=_HEARTBEAT_INTERVAL,
+            ) as ws:
                 self._tunnel_ws = ws
                 logger.info("Tunnel WebSocket connected")
 
@@ -225,19 +252,39 @@ class CloudTunnelManager:
                     "token": cfg.token,
                 })
 
-                async for msg in ws:
-                    if self._stop_event.is_set():
-                        return
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            envelope = json.loads(msg.data)
-                        except json.JSONDecodeError:
-                            logger.warning("Received non-JSON message from hub")
-                            continue
-                        await self._dispatch(ws, envelope)
-                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        logger.info("Tunnel WS closed (type=%s)", msg.type)
-                        return
+                await self._await_registered(ws)
+
+                try:
+                    async for msg in ws:
+                        if self._stop_event.is_set():
+                            return
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                envelope = json.loads(msg.data)
+                            except json.JSONDecodeError:
+                                logger.warning("Received non-JSON message from hub")
+                                continue
+                            await self._dispatch(ws, envelope)
+                        elif msg.type in (
+                            aiohttp.WSMsgType.CLOSE,
+                            aiohttp.WSMsgType.CLOSING,
+                            aiohttp.WSMsgType.CLOSED,
+                            aiohttp.WSMsgType.ERROR,
+                        ):
+                            logger.info("Tunnel WS closed (type=%s)", msg.type)
+                            break
+                finally:
+                    self._tunnel_ws = None
+
+                if self._stop_event.is_set():
+                    return
+
+                if ws.exception():
+                    raise RuntimeError(f"Tunnel socket error: {ws.exception()}")
+
+                raise RuntimeError(
+                    f"Tunnel closed by hub (code={ws.close_code})"
+                )
 
     # ── Envelope dispatch ─────────────────────────────────────────────────────
 
@@ -247,9 +294,7 @@ class CloudTunnelManager:
         envelope: dict,
     ) -> None:
         msg_type = envelope.get("type")
-        if msg_type == "registered":
-            logger.info("Registered with hub as device '%s'", self._config.device_id)
-        elif msg_type == "request":
+        if msg_type == "request":
             asyncio.create_task(self._handle_http(tunnel_ws, envelope))
         elif msg_type == "ws_open":
             asyncio.create_task(self._handle_ws_open(tunnel_ws, envelope))

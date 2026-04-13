@@ -25,10 +25,10 @@ description: |
 
   Connect to an AI Lab Cloud hub for remote access:
 
-    snap set ailab cloud.host=cloud.example.com
+    snap set ailab cloud.host=https://cloud.example.com
     snap set ailab cloud.token=<token from hub dashboard>
     snap set ailab cloud.user=<your GitHub username>
-    snap set ailab cloud.device=<device name shown in dashboard>
+    snap set ailab cloud.device-id=<device name shown in dashboard>
     snap set ailab cloud.ports=11500,18789
 
 license: GPL-3.0+
