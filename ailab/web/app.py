@@ -478,38 +478,51 @@ def _ensure_gateway_cloud_origin_sync(
     browser sends Origin: https://<hub> which is not localhost, so we must
     explicitly permit it.  Restarts the gateway service after patching so the
     new config takes effect immediately.
+
+    Uses container_exec (running as the container user) rather than push_file so
+    that the patched openclaw.json keeps the correct owner/permissions and the
+    gateway (also running as that user) can read it after restart.
     """
-    openclaw_json_path = f"{home}/.openclaw/openclaw.json"
-    try:
-        raw = pull_file(cname, openclaw_json_path)
-        config = json.loads(raw)
-    except Exception as exc:
-        logger.warning("Could not read openclaw.json in %s: %s", cname, exc)
-        return
-
-    origins: list = (
-        config.get("gateway", {})
-        .get("controlUi", {})
-        .get("allowedOrigins", [])
+    patch_py = (
+        "import json, os, sys\n"
+        "p = os.path.join(os.environ['HOME'], '.openclaw', 'openclaw.json')\n"
+        "try:\n"
+        "    config = json.loads(open(p).read())\n"
+        "except Exception as e:\n"
+        "    print('read-error:' + str(e))\n"
+        "    sys.exit(0)\n"
+        f"hub_origin = {hub_origin!r}\n"
+        "origins = config.get('gateway', {}).get('controlUi', {}).get('allowedOrigins', [])\n"
+        "if hub_origin in origins:\n"
+        "    print('already-present')\n"
+        "    sys.exit(0)\n"
+        "origins = list(origins) + [hub_origin]\n"
+        "config.setdefault('gateway', {}).setdefault('controlUi', {})['allowedOrigins'] = origins\n"
+        "open(p, 'w').write(json.dumps(config, indent=2) + '\\n')\n"
+        "print('patched')\n"
     )
-    if hub_origin in origins:
-        return  # already configured, no restart needed
-
-    origins = list(origins)
-    origins.append(hub_origin)
-    config.setdefault("gateway", {}).setdefault("controlUi", {})["allowedOrigins"] = origins
-    try:
-        push_file(cname, openclaw_json_path, json.dumps(config, indent=2) + "\n")
-    except Exception as exc:
-        logger.warning("Could not write openclaw.json in %s: %s", cname, exc)
+    exit_code, stdout, stderr = container_exec(
+        cname,
+        ["python3"],
+        uid=uid, gid=gid,
+        stdin=patch_py.encode(),
+        env={"HOME": home},
+        check=False,
+    )
+    stdout = (stdout or "").strip()
+    if "already-present" in stdout:
+        logger.debug("openclaw allowedOrigins already has %s in %s", hub_origin, cname)
+        return
+    if "patched" not in stdout:
+        logger.warning(
+            "Could not patch openclaw.json in %s (exit=%s stdout=%r stderr=%r)",
+            cname, exit_code, stdout, stderr,
+        )
         return
 
+    logger.info("Added %s to openclaw allowedOrigins in %s, restarting gateway", hub_origin, cname)
     installer = OpenclawInstaller()
     installer._restart_gateway(cname, uid, gid, home)
-    logger.info(
-        "Added %s to openclaw allowedOrigins and restarted gateway in %s",
-        hub_origin, cname,
-    )
 
 
 @app.get("/api/containers/{name}/gateway-url")
