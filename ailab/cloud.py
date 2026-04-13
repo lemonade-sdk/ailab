@@ -296,6 +296,12 @@ class CloudTunnelManager:
         local_path = parsed_path._replace(query=clean_qs).geturl()
         url = f"ws://127.0.0.1:{port}{local_path}"
 
+        # Forward browser headers sent by the hub (e.g. Origin) so local
+        # services that enforce CORS on WS upgrades see the real browser origin.
+        fwd_headers: dict = envelope.get("headers", {})
+        for k, v in fwd_headers.items():
+            extra_headers.setdefault(k.capitalize(), v)
+
         try:
             session = aiohttp.ClientSession()
             local_ws = await session.ws_connect(url, headers=extra_headers or None)
