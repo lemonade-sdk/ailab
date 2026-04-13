@@ -176,6 +176,7 @@ class OpenclawInstaller:
             cname,
             ["bash", "-c",
              "systemctl --user daemon-reload 2>/dev/null || true"
+             " && systemctl --user reset-failed openclaw-gateway 2>/dev/null || true"
              " && systemctl --user restart openclaw-gateway 2>/dev/null || true"],
             uid=uid, gid=gid,
             env={
