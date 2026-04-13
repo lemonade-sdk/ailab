@@ -6,6 +6,12 @@ __pycache__/
 dist/
 build/
 .pybuild/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.codex
+=3.9.0
 debian/.debhelper/
 debian/ailab/
 debian/ailab.postinst.debhelper
