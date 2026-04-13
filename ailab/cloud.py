@@ -6,7 +6,7 @@ on this machine.
 
 Configuration (all optional — cloud tunnel is disabled when host/token are absent):
 
-    AILAB_CLOUD_HOST    Hub hostname, e.g. cloud.example.com
+    AILAB_CLOUD_HOST    Hub hostname or URL, e.g. cloud.example.com or http://localhost:8080
     AILAB_CLOUD_TOKEN   Tunnel registration token from the hub dashboard
     AILAB_CLOUD_USER    GitHub username registered on the hub
     AILAB_CLOUD_DEVICE  Device ID to register (default: system hostname)
@@ -24,7 +24,8 @@ Usage from ailab web app:
 Protocol (JSON over WebSocket text frames)
 ------------------------------------------
 Home device → Hub:
-  {"type": "register",  "github_user": "...", "device_id": "...", "ports": [...]}
+  {"type": "register",  "github_user": "...", "device_id": "...",
+                        "ports": [...], "token": "..."}
   {"type": "response",  "id": "<uuid>",    "status": 200, "headers": {...}, "body": "<base64>"}
   {"type": "ws_opened", "conn_id": "<uuid>"}
   {"type": "ws_error",  "conn_id": "<uuid>", "error": "..."}
@@ -45,6 +46,7 @@ import base64
 import json
 import logging
 import os
+import re
 import socket
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -52,6 +54,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import aiohttp
 
 logger = logging.getLogger("ailab.cloud")
+
+_DEVICE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 # Reconnect delay: start at 2 s, double each attempt, cap at 60 s.
 _BACKOFF_BASE = 2
@@ -71,7 +75,33 @@ class CloudConfig:
     token: str
     github_user: str
     device_id: str
+    secure: bool = True
     ports: list[int] = field(default_factory=list)
+
+    @staticmethod
+    def _normalize_ports(ports_raw: str) -> list[int]:
+        if not ports_raw:
+            return [11500]
+
+        ports: list[int] = []
+        seen: set[int] = set()
+        for item in ports_raw.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if not item.isdigit():
+                raise ValueError(f"Invalid port value: {item!r}")
+            port = int(item)
+            if not 1 <= port <= 65535:
+                raise ValueError(f"Port out of range: {port}")
+            if port not in seen:
+                ports.append(port)
+                seen.add(port)
+
+        if not ports:
+            raise ValueError("At least one cloud port must be configured")
+
+        return ports
 
     @classmethod
     def from_env(cls) -> "CloudConfig | None":
@@ -79,27 +109,35 @@ class CloudConfig:
         token = os.environ.get("AILAB_CLOUD_TOKEN", "").strip()
         if not host or not token:
             return None
+        secure = True
         # Strip any scheme the user may have included (e.g. "https://host" → "host").
         for scheme in ("https://", "http://", "wss://", "ws://"):
             if host.startswith(scheme):
+                secure = scheme in ("https://", "wss://")
                 host = host[len(scheme):]
                 break
         host = host.rstrip("/")
         github_user = os.environ.get("AILAB_CLOUD_USER", "").strip()
         device_id = os.environ.get("AILAB_CLOUD_DEVICE", "").strip() or socket.gethostname()
         ports_raw = os.environ.get("AILAB_CLOUD_PORTS", "").strip()
-        ports = [int(p) for p in ports_raw.split(",") if p.strip().isdigit()] if ports_raw else [11500]
+        if not _DEVICE_ID_RE.fullmatch(device_id):
+            raise ValueError(
+                f"Invalid AILAB_CLOUD_DEVICE {device_id!r}; use lowercase letters, digits, and hyphens"
+            )
+        ports = cls._normalize_ports(ports_raw)
         return cls(
             host=host,
             token=token,
             github_user=github_user,
             device_id=device_id,
+            secure=secure,
             ports=ports,
         )
 
     @property
     def ws_url(self) -> str:
-        return f"wss://{self.host}/tunnel/register?token={self.token}"
+        scheme = "wss" if self.secure else "ws"
+        return f"{scheme}://{self.host}/tunnel/register"
 
 
 class CloudTunnelManager:
@@ -171,7 +209,7 @@ class CloudTunnelManager:
 
     async def _connect_and_serve(self) -> None:
         cfg = self._config
-        connector = aiohttp.TCPConnector(ssl=True)
+        connector = aiohttp.TCPConnector(ssl=cfg.secure)
         async with aiohttp.ClientSession(connector=connector) as session:
             logger.info("Connecting to hub at %s", cfg.ws_url)
             async with session.ws_connect(cfg.ws_url) as ws:
@@ -184,6 +222,7 @@ class CloudTunnelManager:
                     "github_user": cfg.github_user,
                     "device_id": cfg.device_id,
                     "ports": cfg.ports,
+                    "token": cfg.token,
                 })
 
                 async for msg in ws:
@@ -235,6 +274,18 @@ class CloudTunnelManager:
         headers = dict(envelope.get("headers", {}))
         body_b64 = envelope.get("body", "")
 
+        if port not in self._config.ports:
+            response_envelope = {
+                "type": "response",
+                "id": req_id,
+                "status": 403,
+                "headers": {},
+                "body": "",
+                "error": f"Port {port} is not exposed by this device",
+            }
+            await tunnel_ws.send_json(response_envelope)
+            return
+
         body: bytes | None = base64.b64decode(body_b64) if body_b64 else None
 
         fwd_headers = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
@@ -283,6 +334,14 @@ class CloudTunnelManager:
         conn_id = envelope.get("conn_id", "")
         port = envelope.get("port", 80)
         path = envelope.get("path", "/")
+
+        if port not in self._config.ports:
+            await tunnel_ws.send_json({
+                "type": "ws_error",
+                "conn_id": conn_id,
+                "error": f"Port {port} is not exposed by this device",
+            })
+            return
 
         # Extract a `token` query param injected by the ailab web app for
         # services that require Authorization: Bearer (e.g. openclaw gateway).

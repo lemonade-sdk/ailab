@@ -338,7 +338,7 @@ sudo snap set ailab cloud.enabled=true
 sudo snap set ailab cloud.host=https://cloud.example.com
 sudo snap set ailab cloud.user=yourname
 sudo snap set ailab cloud.token=<token from step 2>
-sudo snap set ailab cloud.device-id=myhome
+sudo snap set ailab cloud.device-id=myhome   # lowercase letters, digits, and hyphens only
 sudo snap restart ailab.web
 ```
 
@@ -355,7 +355,7 @@ tools.
 | `cloud.host` | Hub URL, e.g. `https://cloud.example.com` |
 | `cloud.user` | Your GitHub username (must match your hub login) |
 | `cloud.token` | Tunnel token from `/auth/tunnel-token` on the hub |
-| `cloud.device-id` | Short identifier for this machine; becomes part of the URL |
+| `cloud.device-id` | Short identifier for this machine; use lowercase letters, digits, and hyphens only |
 
 ```bash
 snap get ailab cloud   # view all cloud settings at once
