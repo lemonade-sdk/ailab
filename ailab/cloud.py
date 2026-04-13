@@ -47,6 +47,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import aiohttp
 
@@ -282,11 +283,22 @@ class CloudTunnelManager:
         conn_id = envelope.get("conn_id", "")
         port = envelope.get("port", 80)
         path = envelope.get("path", "/")
-        url = f"ws://127.0.0.1:{port}{path}"
+
+        # Extract a `token` query param injected by the ailab web app for
+        # services that require Authorization: Bearer (e.g. openclaw gateway).
+        # Strip it from the local URL so the service doesn't see a stray param.
+        parsed_path = urlparse(path)
+        qs = parse_qs(parsed_path.query, keep_blank_values=True)
+        extra_headers: dict[str, str] = {}
+        if "token" in qs:
+            extra_headers["Authorization"] = f"Bearer {qs.pop('token')[0]}"
+        clean_qs = urlencode({k: v[0] for k, v in qs.items()})
+        local_path = parsed_path._replace(query=clean_qs).geturl()
+        url = f"ws://127.0.0.1:{port}{local_path}"
 
         try:
             session = aiohttp.ClientSession()
-            local_ws = await session.ws_connect(url)
+            local_ws = await session.ws_connect(url, headers=extra_headers or None)
             self._ws_connections[conn_id] = local_ws
             self._ws_sessions[conn_id] = session
 
