@@ -529,7 +529,12 @@ async def api_gateway_url(name: str, request: Request):
         # stored ws://localhost:18789 gateway URL.  Pass gatewayUrl in the hash
         # so the control-ui connects via the tunnel instead.
         ws_base = port_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
-        gateway_ws = f"{ws_base}{OPENCLAW_WS_PATH}"
+        # Embed the token as a query param on the WS URL so cloud.py can
+        # forward it as Authorization: Bearer when connecting locally.
+        gateway_ws = (
+            f"{ws_base}{OPENCLAW_WS_PATH}"
+            f"?token={_urllib_parse.quote(token, safe='')}"
+        )
         params = _urllib_parse.urlencode({"token": token, "gatewayUrl": gateway_ws})
         # Ensure the hub origin is whitelisted in the gateway's CORS config
         # before returning the URL — the gateway must be ready when the browser
