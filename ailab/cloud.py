@@ -43,6 +43,7 @@ Hub → Home device:
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import os
@@ -58,6 +59,7 @@ logger = logging.getLogger("ailab.cloud")
 _DEVICE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _HEARTBEAT_INTERVAL = 30
 _REGISTER_TIMEOUT = 15
+_LOCAL_PROXY_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=5, sock_connect=5, sock_read=60)
 
 # Reconnect delay: start at 2 s, double each attempt, cap at 60 s.
 _BACKOFF_BASE = 2
@@ -120,6 +122,8 @@ class CloudConfig:
                 break
         host = host.rstrip("/")
         github_user = os.environ.get("AILAB_CLOUD_USER", "").strip()
+        if not github_user:
+            raise ValueError("AILAB_CLOUD_USER is required when cloud tunnel is enabled")
         device_id = os.environ.get("AILAB_CLOUD_DEVICE", "").strip() or socket.gethostname()
         ports_raw = os.environ.get("AILAB_CLOUD_PORTS", "").strip()
         if not _DEVICE_ID_RE.fullmatch(device_id):
@@ -151,7 +155,7 @@ class CloudTunnelManager:
         self._stop_event = asyncio.Event()
         # Active proxied WebSocket connections keyed by conn_id.
         self._ws_connections: dict[str, aiohttp.ClientWebSocketResponse] = {}
-        self._ws_sessions: dict[str, aiohttp.ClientSession] = {}
+        self._local_session: aiohttp.ClientSession | None = None
         self._tunnel_ws: aiohttp.ClientWebSocketResponse | None = None
 
     async def _await_registered(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -205,10 +209,23 @@ class CloudTunnelManager:
                 await asyncio.wait_for(self._task, timeout=5)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._task.cancel()
-        # Close any open proxied WS sessions.
-        for session in list(self._ws_sessions.values()):
-            await session.close()
+        await self._close_local_proxies()
         logger.info("Cloud tunnel stopped")
+
+    async def _close_local_proxies(self) -> None:
+        """Close all local proxy sockets and the shared local client session."""
+        for local_ws in list(self._ws_connections.values()):
+            if not local_ws.closed:
+                try:
+                    await local_ws.close()
+                except Exception:
+                    pass
+        self._ws_connections.clear()
+
+        local_session = self._local_session
+        self._local_session = None
+        if local_session and not local_session.closed:
+            await local_session.close()
 
     # ── Internal reconnect loop ───────────────────────────────────────────────
 
@@ -235,69 +252,74 @@ class CloudTunnelManager:
         cfg = self._config
         connector = aiohttp.TCPConnector(ssl=cfg.secure)
         async with aiohttp.ClientSession(connector=connector) as session:
-            logger.info("Connecting to hub at %s", cfg.ws_url)
-            async with session.ws_connect(
-                cfg.ws_url,
-                heartbeat=_HEARTBEAT_INTERVAL,
-            ) as ws:
-                self._tunnel_ws = ws
-                logger.info("Tunnel WebSocket connected")
+            self._local_session = aiohttp.ClientSession(timeout=_LOCAL_PROXY_TIMEOUT)
+            try:
+                logger.info("Connecting to hub at %s", cfg.ws_url)
+                async with session.ws_connect(
+                    cfg.ws_url,
+                    heartbeat=_HEARTBEAT_INTERVAL,
+                ) as ws:
+                    self._tunnel_ws = ws
+                    logger.info("Tunnel WebSocket connected")
 
-                # Send registration message.
-                await ws.send_json({
-                    "type": "register",
-                    "github_user": cfg.github_user,
-                    "device_id": cfg.device_id,
-                    "ports": cfg.ports,
-                    "token": cfg.token,
-                })
+                    # Send registration message.
+                    await ws.send_json({
+                        "type": "register",
+                        "github_user": cfg.github_user,
+                        "device_id": cfg.device_id,
+                        "ports": cfg.ports,
+                        "token": cfg.token,
+                    })
 
-                await self._await_registered(ws)
+                    await self._await_registered(ws)
 
-                try:
-                    async for msg in ws:
-                        if self._stop_event.is_set():
-                            return
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            try:
-                                envelope = json.loads(msg.data)
-                            except json.JSONDecodeError:
-                                logger.warning("Received non-JSON message from hub")
-                                continue
-                            await self._dispatch(ws, envelope)
-                        elif msg.type in (
-                            aiohttp.WSMsgType.CLOSE,
-                            aiohttp.WSMsgType.CLOSING,
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.ERROR,
-                        ):
-                            logger.info("Tunnel WS closed (type=%s)", msg.type)
-                            break
-                finally:
-                    self._tunnel_ws = None
+                    try:
+                        async for msg in ws:
+                            if self._stop_event.is_set():
+                                return
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                try:
+                                    envelope = json.loads(msg.data)
+                                except json.JSONDecodeError:
+                                    logger.warning("Received non-JSON message from hub")
+                                    continue
+                                await self._dispatch(ws, self._local_session, envelope)
+                            elif msg.type in (
+                                aiohttp.WSMsgType.CLOSE,
+                                aiohttp.WSMsgType.CLOSING,
+                                aiohttp.WSMsgType.CLOSED,
+                                aiohttp.WSMsgType.ERROR,
+                            ):
+                                logger.info("Tunnel WS closed (type=%s)", msg.type)
+                                break
+                    finally:
+                        self._tunnel_ws = None
 
-                if self._stop_event.is_set():
-                    return
+                    if self._stop_event.is_set():
+                        return
 
-                if ws.exception():
-                    raise RuntimeError(f"Tunnel socket error: {ws.exception()}")
+                    if ws.exception():
+                        raise RuntimeError(f"Tunnel socket error: {ws.exception()}")
 
-                raise RuntimeError(
-                    f"Tunnel closed by hub (code={ws.close_code})"
-                )
+                    raise RuntimeError(
+                        f"Tunnel closed by hub (code={ws.close_code})"
+                    )
+            finally:
+                await self._close_local_proxies()
 
     # ── Envelope dispatch ─────────────────────────────────────────────────────
 
     async def _dispatch(
         self,
         tunnel_ws: aiohttp.ClientWebSocketResponse,
+        local_session: aiohttp.ClientSession,
         envelope: dict,
     ) -> None:
         msg_type = envelope.get("type")
         if msg_type == "request":
-            asyncio.create_task(self._handle_http(tunnel_ws, envelope))
+            asyncio.create_task(self._handle_http(tunnel_ws, local_session, envelope))
         elif msg_type == "ws_open":
-            asyncio.create_task(self._handle_ws_open(tunnel_ws, envelope))
+            asyncio.create_task(self._handle_ws_open(tunnel_ws, local_session, envelope))
         elif msg_type == "ws_frame":
             await self._handle_ws_frame(envelope)
         elif msg_type == "ws_close":
@@ -310,6 +332,7 @@ class CloudTunnelManager:
     async def _handle_http(
         self,
         tunnel_ws: aiohttp.ClientWebSocketResponse,
+        local_session: aiohttp.ClientSession,
         envelope: dict,
     ) -> None:
         req_id = envelope.get("id", "")
@@ -331,28 +354,36 @@ class CloudTunnelManager:
             await tunnel_ws.send_json(response_envelope)
             return
 
-        body: bytes | None = base64.b64decode(body_b64) if body_b64 else None
-
         fwd_headers = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
 
         url = f"http://127.0.0.1:{port}{path}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
-                    method, url, headers=fwd_headers, data=body, allow_redirects=False
-                ) as resp:
-                    resp_body = await resp.read()
-                    resp_headers = {
-                        k: v for k, v in resp.headers.items()
-                        if k.lower() not in _HOP_BY_HOP
-                    }
-                    response_envelope = {
-                        "type": "response",
-                        "id": req_id,
-                        "status": resp.status,
-                        "headers": resp_headers,
-                        "body": base64.b64encode(resp_body).decode(),
-                    }
+            body: bytes | None = base64.b64decode(body_b64, validate=True) if body_b64 else None
+            async with local_session.request(
+                method, url, headers=fwd_headers, data=body, allow_redirects=False
+            ) as resp:
+                resp_body = await resp.read()
+                resp_headers = {
+                    k: v for k, v in resp.headers.items()
+                    if k.lower() not in _HOP_BY_HOP
+                }
+                response_envelope = {
+                    "type": "response",
+                    "id": req_id,
+                    "status": resp.status,
+                    "headers": resp_headers,
+                    "body": base64.b64encode(resp_body).decode(),
+                }
+        except (binascii.Error, ValueError) as exc:
+            logger.warning("HTTP proxy request body decode error for %s %s: %s", method, url, exc)
+            response_envelope = {
+                "type": "response",
+                "id": req_id,
+                "status": 400,
+                "headers": {},
+                "body": "",
+                "error": f"Invalid base64 request body: {exc}",
+            }
         except Exception as exc:
             logger.warning("HTTP proxy error for %s %s: %s", method, url, exc)
             response_envelope = {
@@ -374,6 +405,7 @@ class CloudTunnelManager:
     async def _handle_ws_open(
         self,
         tunnel_ws: aiohttp.ClientWebSocketResponse,
+        local_session: aiohttp.ClientSession,
         envelope: dict,
     ) -> None:
         conn_id = envelope.get("conn_id", "")
@@ -407,10 +439,8 @@ class CloudTunnelManager:
             extra_headers.setdefault(k.capitalize(), v)
 
         try:
-            session = aiohttp.ClientSession()
-            local_ws = await session.ws_connect(url, headers=extra_headers or None)
+            local_ws = await local_session.ws_connect(url, headers=extra_headers or None)
             self._ws_connections[conn_id] = local_ws
-            self._ws_sessions[conn_id] = session
 
             # Acknowledge the open.
             await tunnel_ws.send_json({"type": "ws_opened", "conn_id": conn_id})
@@ -454,9 +484,6 @@ class CloudTunnelManager:
             logger.debug("WS relay error conn=%s: %s", conn_id, exc)
         finally:
             self._ws_connections.pop(conn_id, None)
-            session = self._ws_sessions.pop(conn_id, None)
-            if session:
-                await session.close()
             try:
                 await tunnel_ws.send_json({"type": "ws_close", "conn_id": conn_id})
             except Exception:
@@ -469,7 +496,12 @@ class CloudTunnelManager:
         if local_ws is None or local_ws.closed:
             return
         opcode = envelope.get("opcode", 1)
-        data = base64.b64decode(envelope.get("data", ""))
+        try:
+            data = base64.b64decode(envelope.get("data", ""), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            logger.warning("WS frame decode error conn=%s: %s", conn_id, exc)
+            await self._handle_ws_close({"conn_id": conn_id})
+            return
         try:
             if opcode == 2:
                 await local_ws.send_bytes(data)
@@ -482,12 +514,9 @@ class CloudTunnelManager:
         """Close a proxied local WebSocket connection."""
         conn_id = envelope.get("conn_id", "")
         local_ws = self._ws_connections.pop(conn_id, None)
-        session = self._ws_sessions.pop(conn_id, None)
         if local_ws and not local_ws.closed:
             try:
                 await local_ws.close()
             except Exception:
                 pass
-        if session:
-            await session.close()
         logger.debug("WS proxy closed conn=%s", conn_id)
