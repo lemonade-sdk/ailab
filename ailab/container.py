@@ -508,6 +508,7 @@ async def _run_socket_shell(
             resize_task: asyncio.Task | None = None
             input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
             input_closed = False
+            input_barrier_sent = False
 
             async def send_resize():
                 cols, rows = shutil.get_terminal_size(fallback=(80, 24))
@@ -546,9 +547,13 @@ async def _run_socket_shell(
                 input_queue.put_nowait(data)
 
             async def stdin_to_lxd():
+                nonlocal input_barrier_sent
                 while True:
                     data = await input_queue.get()
                     if data is None:
+                        if not input_barrier_sent:
+                            input_barrier_sent = True
+                            await lxd_data.send_str("")
                         break
                     await lxd_data.send_bytes(data)
 
@@ -561,6 +566,12 @@ async def _run_socket_shell(
                     elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                         break
 
+            async def watch_control():
+                async for msg in lxd_ctrl:
+                    if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                        break
+                close_input()
+
             try:
                 tty.setraw(stdin_fd)
                 os.set_blocking(stdin_fd, False)
@@ -569,16 +580,14 @@ async def _run_socket_shell(
                 queue_resize()
                 output_task = asyncio.create_task(lxd_to_stdout())
                 input_task = asyncio.create_task(stdin_to_lxd())
+                control_task = asyncio.create_task(watch_control())
                 try:
-                    await asyncio.wait(
-                        [output_task, input_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    await output_task
                 finally:
                     close_input()
-                    for task in (output_task, input_task):
+                    for task in (output_task, input_task, control_task):
                         task.cancel()
-                    await asyncio.gather(output_task, input_task, return_exceptions=True)
+                    await asyncio.gather(output_task, input_task, control_task, return_exceptions=True)
             finally:
                 if not input_closed:
                     loop.remove_reader(stdin_fd)
