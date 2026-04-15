@@ -363,6 +363,7 @@ tools.
 | `cloud.user` | Your GitHub username (must match your hub login) |
 | `cloud.token` | Tunnel token from `/auth/tunnel-token` on the hub |
 | `cloud.device-id` | Short identifier for this machine; use lowercase letters, digits, and hyphens only |
+| `cloud.ports` | Comma-separated local ports to expose through the tunnel (default: `11500`; add `18789` for openclaw and any other tool ports you want reachable remotely) |
 
 ```bash
 snap get ailab cloud   # view all cloud settings at once
