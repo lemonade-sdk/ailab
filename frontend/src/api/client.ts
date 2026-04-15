@@ -15,7 +15,7 @@ const BASE = `${import.meta.env.BASE_URL}api`;
  */
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const m = window.location.pathname.match(/^(\/d\/[^/]+)\//);
+  const m = window.location.pathname.match(/^(\/d\/[^/]+)(?:\/|$)/);
   if (m) {
     return `${proto}//${window.location.host}${m[1]}${path}`;
   }

@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import ipaddress as _ipaddress
 import json
 import logging
 import socket as _socket
@@ -455,7 +456,25 @@ def _port_base_url(request: Request) -> str:
     'http://localhost' so existing behaviour is unchanged.
     """
     tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
-    return tunnel_base if tunnel_base else "http://localhost"
+    if not tunnel_base:
+        return "http://localhost"
+
+    client_host = request.client.host if request.client else "unknown"
+    try:
+        trusted_client = client_host == "localhost" or _ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        trusted_client = False
+
+    if not trusted_client:
+        logger.warning("Ignoring untrusted X-Ailab-Tunnel-Base header from %s", client_host)
+        return "http://localhost"
+
+    parsed = _urllib_parse.urlparse(tunnel_base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        logger.warning("Ignoring invalid X-Ailab-Tunnel-Base header: %r", tunnel_base)
+        return "http://localhost"
+
+    return parsed._replace(params="", query="", fragment="").geturl().rstrip("/")
 
 
 @app.get("/api/port-base-url")

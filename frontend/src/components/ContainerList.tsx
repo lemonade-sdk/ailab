@@ -111,7 +111,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
   const [url, setUrl] = useState<string | null>(null);
   const [notPaired, setNotPaired] = useState(false);
   const [showPairModal, setShowPairModal] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const fetchUrl = () => {
     setLoading(true);
@@ -145,7 +145,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
     return () => clearInterval(interval);
   }, [notPaired, name, port]);
 
-  if (loading) {
+  if (loading || (!url && !notPaired)) {
     return (
       <span className="inline-flex items-center justify-center w-full bg-slate-700/50 text-slate-400 text-xs px-3 py-2 rounded-lg">
         …
@@ -440,4 +440,3 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
     </>
   );
 }
-
