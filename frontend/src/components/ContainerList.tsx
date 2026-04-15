@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Container } from '../types';
-import { startContainer, stopContainer, deleteContainer, getGatewayUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
+import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
 import { SSEEvent } from '../types';
 
 interface Props {
@@ -21,8 +21,8 @@ const GATEWAY_PORTS: Record<number, string> = {
   18800: 'picoclaw',
 };
 
-// Ports that use token-based auth — URL fetched from API rather than constructed client-side.
-const TOKEN_AUTH_PORTS = new Set([18789]);
+// Port used by openclaw — URL includes an auth token so it's always fetched from the API.
+const OPENCLAW_PORT_FOR_URL = 18789;
 
 // Port used by openclaw — used to detect whether to fetch the configured model.
 const OPENCLAW_PORT = 18789;
@@ -54,10 +54,12 @@ function PairModal({ name, onClose, onPaired }: { name: string; onClose: () => v
       if (cancelled) return;
       if (event.type === 'log') {
         setLogs(prev => [...prev, event.msg ?? '']);
-        const match = (event.msg ?? '').match(/http:\/\/localhost:\d+\/#token=\S+/);
-        if (match) setPairedUrl(match[0]);
       } else if (event.type === 'done') {
         setDone(true);
+        // Fetch the URL from the API — it will be tunnel-aware.
+        getGatewayUrl(name).then(({ url }) => {
+          if (!cancelled) setPairedUrl(url);
+        }).catch(() => {});
       } else if (event.type === 'error') {
         setLogs(prev => [...prev, `Error: ${event.msg}`]);
         setDone(true);
@@ -109,21 +111,27 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
   const [url, setUrl] = useState<string | null>(null);
   const [notPaired, setNotPaired] = useState(false);
   const [showPairModal, setShowPairModal] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const fetchUrl = () => {
-    if (!TOKEN_AUTH_PORTS.has(port)) {
-      setUrl(`http://localhost:${port}`);
+    setLoading(true);
+    if (port !== OPENCLAW_PORT_FOR_URL) {
+      // Non-token ports: ask the server for the base URL so tunnel routing works.
+      getPortBaseUrl()
+        .then((base) => setUrl(`${base}:${port}`))
+        .catch(() => setUrl(`http://localhost:${port}`))
+        .finally(() => setLoading(false));
       return;
     }
-    setLoading(true);
     getGatewayUrl(name)
       .then(({ url }) => { setUrl(url); setNotPaired(false); })
       .catch((err) => {
         if (String(err).includes('404')) {
           setNotPaired(true);
         } else {
-          setUrl(`http://localhost:${port}`);
+          getPortBaseUrl()
+            .then((base) => setUrl(`${base}:${port}`))
+            .catch(() => setUrl(`http://localhost:${port}`));
         }
       })
       .finally(() => setLoading(false));
@@ -137,7 +145,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
     return () => clearInterval(interval);
   }, [notPaired, name, port]);
 
-  if (loading) {
+  if (loading || (!url && !notPaired)) {
     return (
       <span className="inline-flex items-center justify-center w-full bg-slate-700/50 text-slate-400 text-xs px-3 py-2 rounded-lg">
         …
@@ -174,7 +182,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
 
   return (
     <a
-      href={url ?? `http://localhost:${port}`}
+      href={url ?? '#'}
       target="_blank"
       rel="noopener noreferrer"
       className="inline-flex items-center justify-center gap-2 w-full bg-lemon-500/15 hover:bg-lemon-500/25 border border-lemon-500/40 text-lemon-400 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
@@ -432,4 +440,3 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
     </>
   );
 }
-

@@ -28,6 +28,8 @@ OPENCLAW_PORTS = [
 ]
 OPENCLAW_GATEWAY_PORT = 18789
 OPENCLAW_PROXY_DEVICE = "proxy-out-openclaw"
+# WebSocket path served by the openclaw gateway (used to construct tunnel URLs)
+OPENCLAW_WS_PATH = "/__openclaw__/ws"
 
 
 class OpenclawInstaller:
@@ -174,6 +176,7 @@ class OpenclawInstaller:
             cname,
             ["bash", "-c",
              "systemctl --user daemon-reload 2>/dev/null || true"
+             " && systemctl --user reset-failed openclaw-gateway 2>/dev/null || true"
              " && systemctl --user restart openclaw-gateway 2>/dev/null || true"],
             uid=uid, gid=gid,
             env={

@@ -295,6 +295,89 @@ whose host port is already bound, so containers can start without conflicts.
 Conflicting proxies are restored to the config so they activate once the port
 is freed.
 
+## Cloud Access
+
+AI Lab Cloud lets you access your home containers from any browser, anywhere
+— no VPN or port forwarding required. A lightweight tunnel client runs
+alongside the web daemon, opening an outbound connection to a hub you
+self-host on a VPS.
+
+Keep `ailab` and `ailab-cloud` in step when deploying tunnel-related changes.
+The client and hub are developed together, so protocol or registration changes
+should be rolled out as a matched pair.
+
+### How it works
+
+```
+Browser (anywhere)  ──HTTPS──►  AI Lab Cloud Hub (your VPS)
+                                        │
+                               WebSocket tunnel
+                               (outbound from home)
+                                        │
+                               AI Lab (your home machine)
+                                        │
+                               LXD proxy device
+                                        │
+                               Container: openclaw / nullclaw / etc.
+```
+
+The hub authenticates your browser via GitHub OAuth and routes traffic only
+to the tunnel registered by the matching GitHub user.
+
+### Quick setup
+
+**1. Deploy the hub** on a VPS with a single snap install — Redis, Caddy
+(TLS), and the hub API are all bundled. Full instructions are in the
+[AI Lab Cloud README](https://github.com/lemonade-sdk/ailab-cloud).
+
+**2. Get your tunnel token.** Log in to your hub in a browser, then visit:
+```
+https://cloud.example.com/auth/tunnel-token
+```
+
+**3. Configure AI Lab on your home machine:**
+
+```bash
+sudo snap set ailab cloud.enabled=true
+sudo snap set ailab cloud.host=https://cloud.example.com
+sudo snap set ailab cloud.user=yourname
+sudo snap set ailab cloud.token=<token from step 2>
+sudo snap set ailab cloud.device-id=myhome   # lowercase letters, digits, and hyphens only
+sudo snap restart ailab.web
+```
+
+`cloud.host` accepts either `cloud.example.com` or `https://cloud.example.com`,
+but the full URL is the recommended form.
+
+**4. Visit** `https://myhome.cloud.example.com` from any browser and log
+in with GitHub. The full AI Lab dashboard loads proxied through the tunnel,
+including the interactive terminal and all "Open …" buttons for installed
+tools.
+
+### Cloud settings reference
+
+| Setting | Description |
+|---|---|
+| `cloud.enabled` | Set to `true` to start the tunnel client (default: `false`) |
+| `cloud.host` | Hub URL or hostname, e.g. `https://cloud.example.com` |
+| `cloud.user` | Your GitHub username (must match your hub login) |
+| `cloud.token` | Tunnel token from `/auth/tunnel-token` on the hub |
+| `cloud.device-id` | Short identifier for this machine; use lowercase letters, digits, and hyphens only |
+| `cloud.ports` | Comma-separated local ports to expose through the tunnel (default: `11500`; add `18789` for openclaw and any other tool ports you want reachable remotely) |
+
+```bash
+snap get ailab cloud   # view all cloud settings at once
+```
+
+Disable cloud access without losing the settings:
+
+```bash
+sudo snap set ailab cloud.enabled=false
+sudo snap restart ailab.web
+```
+
+---
+
 ## Tips
 
 **Web interface**: `ailab web` serves a React dashboard at

@@ -1,14 +1,19 @@
 """LXD container management for ailab — via LXD REST API (pylxd)."""
 
+import asyncio
 import os
 import pwd
 import shutil
+import signal
 import socket
 import sys
+import termios
 import textwrap
 import time
+import tty
 from pathlib import Path
 
+import aiohttp
 import pylxd
 import pylxd.exceptions
 
@@ -425,6 +430,194 @@ def container_exec(
             f"{result.stderr or ''}"
         )
     return result.exit_code, result.stdout or "", result.stderr or ""
+
+
+def _build_shell_exec_argv(post_cmds: list[str] | None = None) -> list[str]:
+    """Return the login-shell command argv for an interactive session."""
+    if post_cmds:
+        chain = "; ".join(post_cmds)
+        return ["/bin/bash", "--login", "-c", f"{chain}; exec bash --login"]
+    return ["/bin/bash", "--login"]
+
+
+def _build_shell_exec_data(
+    name: str,
+    exec_argv: list[str],
+    username: str,
+    uid: int,
+    gid: int,
+    home: str,
+) -> dict:
+    """Return the LXD exec payload for an interactive login shell."""
+    try:
+        welcome = build_shell_welcome(name)
+    except Exception:
+        welcome = "Welcome to your AI Lab container!"
+
+    return {
+        "command": exec_argv,
+        "environment": {
+            "HOME": home,
+            "USER": username,
+            "LOGNAME": username,
+            "TERM": "xterm-256color",
+            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+            "SHELL_WELCOME": welcome,
+        },
+        "interactive": True,
+        "wait-for-websocket": True,
+        "cwd": home,
+        "user": uid,
+        "group": gid,
+    }
+
+
+async def _run_socket_shell(
+    cname: str,
+    exec_data: dict,
+):
+    """Run an interactive shell via the LXD exec websocket API."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise RuntimeError("Interactive shell requires a TTY")
+
+    socket_path = _find_lxd_socket()
+    connector = aiohttp.UnixConnector(path=socket_path)
+    async with aiohttp.ClientSession(connector=connector) as http:
+        async with http.post(
+            f"http://localhost/1.0/instances/{cname}/exec",
+            params={"project": AILAB_PROJECT},
+            json=exec_data,
+        ) as resp:
+            op = await resp.json()
+
+        if op.get("status_code") not in (100, 200):
+            raise RuntimeError(op.get("error", "unknown error"))
+
+        uuid = op["operation"].split("/")[-1]
+        fds = op["metadata"]["metadata"]["fds"]
+        ws_url = f"http://localhost/1.0/operations/{uuid}/websocket"
+
+        async with http.ws_connect(ws_url, params={"secret": fds["0"]}) as lxd_data, \
+                http.ws_connect(ws_url, params={"secret": fds["control"]}) as lxd_ctrl:
+            loop = asyncio.get_running_loop()
+            stdin_fd = sys.stdin.fileno()
+            stdout_fd = sys.stdout.fileno()
+            original_tty = termios.tcgetattr(stdin_fd)
+            original_winch = signal.getsignal(signal.SIGWINCH)
+            resize_task: asyncio.Task | None = None
+            input_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+            input_closed = False
+            input_barrier_sent = False
+
+            async def send_resize():
+                cols, rows = shutil.get_terminal_size(fallback=(80, 24))
+                await lxd_ctrl.send_json({
+                    "command": "window-resize",
+                    "args": {"width": str(cols), "height": str(rows)},
+                })
+
+            def queue_resize(*_args):
+                nonlocal resize_task
+                if resize_task and not resize_task.done():
+                    resize_task.cancel()
+                resize_task = loop.create_task(send_resize())
+
+            def close_input():
+                nonlocal input_closed
+                if input_closed:
+                    return
+                input_closed = True
+                loop.remove_reader(stdin_fd)
+                input_queue.put_nowait(None)
+
+            def on_stdin_ready():
+                try:
+                    data = os.read(stdin_fd, 4096)
+                except BlockingIOError:
+                    return
+                except OSError:
+                    close_input()
+                    return
+
+                if not data:
+                    close_input()
+                    return
+
+                input_queue.put_nowait(data)
+
+            async def stdin_to_lxd():
+                nonlocal input_barrier_sent
+                while True:
+                    data = await input_queue.get()
+                    if data is None:
+                        if not input_barrier_sent:
+                            input_barrier_sent = True
+                            await lxd_data.send_str("")
+                        break
+                    await lxd_data.send_bytes(data)
+
+            async def lxd_to_stdout():
+                async for msg in lxd_data:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        os.write(stdout_fd, msg.data)
+                    elif msg.type == aiohttp.WSMsgType.TEXT:
+                        os.write(stdout_fd, msg.data.encode())
+                    elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                        break
+
+            async def watch_control():
+                async for msg in lxd_ctrl:
+                    if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
+                        break
+                close_input()
+
+            try:
+                tty.setraw(stdin_fd)
+                os.set_blocking(stdin_fd, False)
+                loop.add_reader(stdin_fd, on_stdin_ready)
+                signal.signal(signal.SIGWINCH, queue_resize)
+                queue_resize()
+                output_task = asyncio.create_task(lxd_to_stdout())
+                input_task = asyncio.create_task(stdin_to_lxd())
+                control_task = asyncio.create_task(watch_control())
+                try:
+                    await output_task
+                finally:
+                    close_input()
+                    for task in (output_task, input_task, control_task):
+                        task.cancel()
+                    await asyncio.gather(output_task, input_task, control_task, return_exceptions=True)
+            finally:
+                if not input_closed:
+                    loop.remove_reader(stdin_fd)
+                os.set_blocking(stdin_fd, True)
+                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, original_tty)
+                signal.signal(signal.SIGWINCH, original_winch)
+                if resize_task:
+                    await asyncio.gather(resize_task, return_exceptions=True)
+                for lxd_ws in (lxd_data, lxd_ctrl):
+                    try:
+                        await lxd_ws.close()
+                    except Exception:
+                        pass
+
+
+def _run_container_via_socket_shell(
+    name: str,
+    cname: str,
+    exec_argv: list[str],
+    username: str,
+    uid: int,
+    gid: int,
+    home: str,
+):
+    """Open an interactive shell using the LXD Unix socket instead of lxc."""
+    exec_data = _build_shell_exec_data(name, exec_argv, username, uid, gid, home)
+    try:
+        asyncio.run(_run_socket_shell(cname, exec_data))
+    except RuntimeError as exc:
+        raise RuntimeError(f"Could not open interactive shell in '{name}': {exc}") from exc
 
 
 # ── Public device API (used by installers) ───────────────────────────────────
@@ -972,11 +1165,11 @@ def run_container(name: str, post_cmds: list[str] | None = None):
 
     print(f"Opening shell in '{name}' as {username}...")
 
-    if post_cmds:
-        chain = "; ".join(post_cmds)
-        exec_argv = ["/bin/bash", "--login", "-c", f"{chain}; exec bash --login"]
-    else:
-        exec_argv = ["/bin/bash", "--login"]
+    exec_argv = _build_shell_exec_argv(post_cmds)
+
+    if os.environ.get("SNAP"):
+        _run_container_via_socket_shell(name, cname, exec_argv, username, uid, gid, home)
+        return
 
     # Use lxc exec for the interactive shell — it's the only operation that
     # needs a real PTY, which the REST API exec doesn't provide cleanly.
@@ -1147,5 +1340,3 @@ def delete_container(name: str, force: bool = False):
                 pass
 
     print(f"Container '{name}' deleted.")
-
-

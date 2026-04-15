@@ -1,6 +1,26 @@
 import { Container, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
 
-const BASE = '/api';
+// Use Vite's BASE_URL so API calls resolve correctly whether the app is served
+// from the root (local: '/') or from a tunnel sub-path (e.g. '/d/device:11500/').
+const BASE = `${import.meta.env.BASE_URL}api`;
+
+/**
+ * Construct an absolute WebSocket URL for `path` (e.g. '/api/ws/shell/mybox').
+ *
+ * Local:  ws://localhost:11500/api/ws/shell/mybox
+ * Tunnel: wss://hub.example.com/d/framework:11500/api/ws/shell/mybox
+ *
+ * The hub's WebSocket proxy route mirrors the HTTP route: /d/{target}/{path},
+ * so we just prefix with the device segment when running behind the tunnel.
+ */
+export function wsUrl(path: string): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const m = window.location.pathname.match(/^(\/d\/[^/]+)(?:\/|$)/);
+  if (m) {
+    return `${proto}//${window.location.host}${m[1]}${path}`;
+  }
+  return `${proto}//${window.location.host}${path}`;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, options);
@@ -50,6 +70,11 @@ export async function addPort(
 
 export async function removePort(name: string, device: string): Promise<void> {
   await request(`/containers/${name}/ports/${device}`, { method: 'DELETE' });
+}
+
+export async function getPortBaseUrl(): Promise<string> {
+  const { base } = await request<{ base: string }>('/port-base-url');
+  return base;
 }
 
 export async function getGatewayUrl(name: string): Promise<{ url: string }> {

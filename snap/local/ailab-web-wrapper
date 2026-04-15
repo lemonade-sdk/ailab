@@ -1,9 +1,26 @@
 #!/bin/bash
-# Wrapper for the ailab web daemon that reads snap config for host and port.
+# Wrapper for the ailab web daemon that reads snap config for host, port,
+# and optional cloud tunnel settings.
 set -euo pipefail
 
 HOST=$(snapctl get web.host)
 PORT=$(snapctl get web.port)
+
+# ── Cloud tunnel settings (optional) ─────────────────────────────────────────
+CLOUD_ENABLED=$(snapctl get cloud.enabled 2>/dev/null || true)
+CLOUD_HOST=$(snapctl get cloud.host 2>/dev/null || true)
+CLOUD_TOKEN=$(snapctl get cloud.token 2>/dev/null || true)
+CLOUD_USER=$(snapctl get cloud.user 2>/dev/null || true)
+CLOUD_DEVICE=$(snapctl get cloud.device-id 2>/dev/null || true)
+CLOUD_PORTS=$(snapctl get cloud.ports 2>/dev/null || true)
+
+if [ "${CLOUD_ENABLED:-false}" = "true" ] && [ -n "$CLOUD_HOST" ] && [ -n "$CLOUD_TOKEN" ]; then
+    export AILAB_CLOUD_HOST="$CLOUD_HOST"
+    export AILAB_CLOUD_TOKEN="$CLOUD_TOKEN"
+    [ -n "$CLOUD_USER" ]   && export AILAB_CLOUD_USER="$CLOUD_USER"
+    [ -n "$CLOUD_DEVICE" ] && export AILAB_CLOUD_DEVICE="$CLOUD_DEVICE"
+    [ -n "$CLOUD_PORTS" ]  && export AILAB_CLOUD_PORTS="$CLOUD_PORTS"
+fi
 
 exec "$SNAP/bin/ailab" web \
     --host "${HOST:-127.0.0.1}" \

@@ -2,12 +2,14 @@
 
 import asyncio
 import io
+import ipaddress as _ipaddress
 import json
 import logging
 import socket as _socket
 import sys
 import time as _time
 import urllib.error as _urllib_error
+import urllib.parse as _urllib_parse
 import urllib.request as _urllib_request
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,8 @@ from typing import Any
 import aiohttp
 import pylxd.exceptions
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -47,8 +50,10 @@ from ailab.container import (
 from ailab.installers import INSTALLERS, get_installer
 from ailab.installers.openclaw import (
     OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_WS_PATH,
     OpenclawInstaller,
 )
+from ailab.cloud import CloudTunnelManager
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -75,7 +80,17 @@ def _detect_lemonade_port() -> int | None:
             pass
     return None
 
-app = FastAPI(title="ailab web interface")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    tunnel = CloudTunnelManager.from_env()
+    if tunnel:
+        await tunnel.start()
+    yield
+    if tunnel:
+        await tunnel.stop()
+
+
+app = FastAPI(title="ailab web interface", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -431,20 +446,142 @@ def _get_or_create_gateway_token(token_dir: Path) -> str:
     return _secrets.token_urlsafe(32)
 
 
+def _port_base_url(request: Request) -> str:
+    """Return the base used to construct port-specific URLs.
+
+    When the request came through the cloud tunnel the proxy injects
+    'X-Ailab-Tunnel-Base' (e.g. 'https://hub.example.com/d/mydevice').
+    Appending ':{port}' produces the correct tunnel URL for that port.
+    When accessed locally the header is absent and we fall back to
+    'http://localhost' so existing behaviour is unchanged.
+    """
+    tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
+    if not tunnel_base:
+        return "http://localhost"
+
+    client_host = request.client.host if request.client else "unknown"
+    try:
+        trusted_client = client_host == "localhost" or _ipaddress.ip_address(client_host).is_loopback
+    except ValueError:
+        trusted_client = False
+
+    if not trusted_client:
+        logger.warning("Ignoring untrusted X-Ailab-Tunnel-Base header from %s", client_host)
+        return "http://localhost"
+
+    parsed = _urllib_parse.urlparse(tunnel_base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        logger.warning("Ignoring invalid X-Ailab-Tunnel-Base header: %r", tunnel_base)
+        return "http://localhost"
+
+    return parsed._replace(params="", query="", fragment="").geturl().rstrip("/")
+
+
+@app.get("/api/port-base-url")
+async def api_port_base_url(request: Request):
+    """Return the base URL the frontend should use to construct port-specific links.
+
+    Returns 'http://localhost' when accessed locally, or the tunnel proxy
+    base URL when accessed through the cloud.
+    """
+    return {"base": _port_base_url(request)}
+
+
+def _ensure_gateway_cloud_origin_sync(
+    cname: str, home: str, uid: int, gid: int, hub_origin: str
+) -> None:
+    """Add hub_origin to gateway.controlUi.allowedOrigins in openclaw.json if absent.
+
+    The openclaw gateway rejects WebSocket connections whose Origin header is not
+    in allowedOrigins.  When the control-ui is opened through the cloud tunnel the
+    browser sends Origin: https://<hub> which is not localhost, so we must
+    explicitly permit it.  Restarts the gateway service after patching so the
+    new config takes effect immediately.
+
+    Uses container_exec (running as the container user) rather than push_file so
+    that the patched openclaw.json keeps the correct owner/permissions and the
+    gateway (also running as that user) can read it after restart.
+    """
+    patch_py = (
+        "import json, os, sys\n"
+        "p = os.path.join(os.environ['HOME'], '.openclaw', 'openclaw.json')\n"
+        "try:\n"
+        "    config = json.loads(open(p).read())\n"
+        "except Exception as e:\n"
+        "    print('read-error:' + str(e))\n"
+        "    sys.exit(0)\n"
+        f"hub_origin = {hub_origin!r}\n"
+        "origins = config.get('gateway', {}).get('controlUi', {}).get('allowedOrigins', [])\n"
+        "if hub_origin in origins:\n"
+        "    print('already-present')\n"
+        "    sys.exit(0)\n"
+        "origins = list(origins) + [hub_origin]\n"
+        "config.setdefault('gateway', {}).setdefault('controlUi', {})['allowedOrigins'] = origins\n"
+        "open(p, 'w').write(json.dumps(config, indent=2) + '\\n')\n"
+        "print('patched')\n"
+    )
+    exit_code, stdout, stderr = container_exec(
+        cname,
+        ["python3"],
+        uid=uid, gid=gid,
+        stdin=patch_py.encode(),
+        env={"HOME": home},
+        check=False,
+    )
+    stdout = (stdout or "").strip()
+    if "already-present" in stdout:
+        logger.debug("openclaw allowedOrigins already has %s in %s", hub_origin, cname)
+        return
+    if "patched" not in stdout:
+        logger.warning(
+            "Could not patch openclaw.json in %s (exit=%s stdout=%r stderr=%r)",
+            cname, exit_code, stdout, stderr,
+        )
+        return
+
+    logger.info("Added %s to openclaw allowedOrigins in %s, restarting gateway", hub_origin, cname)
+    installer = OpenclawInstaller()
+    installer._restart_gateway(cname, uid, gid, home)
+
+
 @app.get("/api/containers/{name}/gateway-url")
-async def api_gateway_url(name: str):
+async def api_gateway_url(name: str, request: Request):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
-    _, _, _, home = await asyncio.to_thread(_get_container_user, cname)
+    username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
     token_dir = container_config_dir(name, home) / "openclaw"
     token = _read_gateway_token(token_dir)
     if not token:
         raise HTTPException(status_code=404, detail="openclaw device token not found")
-    return {"url": f"http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}"}
+    base = _port_base_url(request)
+    port_url = f"{base}:{OPENCLAW_GATEWAY_PORT}"
+    tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
+    if tunnel_base:
+        # When served through the cloud tunnel, openclaw's JS can't reach the
+        # stored ws://localhost:18789 gateway URL.  Pass gatewayUrl in the hash
+        # so the control-ui connects via the tunnel instead.
+        ws_base = port_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+        # Embed the token as a query param on the WS URL so cloud.py can
+        # forward it as Authorization: Bearer when connecting locally.
+        gateway_ws = (
+            f"{ws_base}{OPENCLAW_WS_PATH}"
+            f"?token={_urllib_parse.quote(token, safe='')}"
+        )
+        params = _urllib_parse.urlencode({"token": token, "gatewayUrl": gateway_ws})
+        # Ensure the hub origin is whitelisted in the gateway's CORS config
+        # before returning the URL — the gateway must be ready when the browser
+        # opens it, so we await rather than fire-and-forget.
+        parsed = _urllib_parse.urlparse(tunnel_base)
+        hub_origin = f"{parsed.scheme}://{parsed.netloc}"
+        await asyncio.to_thread(
+            _ensure_gateway_cloud_origin_sync, cname, home, uid, gid, hub_origin
+        )
+        return {"url": f"{port_url}/#{params}"}
+    return {"url": f"{port_url}/#token={token}"}
 
 
 @app.post("/api/containers/{name}/gateway-pair")
-async def api_gateway_pair(name: str):
+async def api_gateway_pair(name: str, request: Request):
     """Run openclaw onboard inside the container to pair the gateway device."""
     cname = _container_name(name)
     status = await asyncio.to_thread(_container_status, cname)
@@ -458,6 +595,7 @@ async def api_gateway_pair(name: str):
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
     installer = OpenclawInstaller()
+    port_base = _port_base_url(request)
 
     def task():
         gateway_token = _get_or_create_gateway_token(token_dir)
@@ -486,7 +624,7 @@ async def api_gateway_pair(name: str):
 
         token = _read_gateway_token(token_dir)
         if token:
-            print(f"Paired! Dashboard: http://localhost:{OPENCLAW_GATEWAY_PORT}/#token={token}")
+            print(f"Paired! Dashboard: {port_base}:{OPENCLAW_GATEWAY_PORT}/#token={token}")
         else:
             print("Warning: pairing may not have succeeded — check container logs")
 
@@ -670,7 +808,7 @@ def _stream_lemonade_pull(resp, model_name: str) -> None:
 def _lemonade_model_entry(m: dict) -> dict:
     """Build an openclaw model config dict from a lemonade /api/v1/models entry."""
     labels = m.get("labels") or []
-    ctx_size = (m.get("recipe_options") or {}).get("ctx_size", 32768)
+    ctx_size = max((m.get("recipe_options") or {}).get("ctx_size", 32768) or 32768, 1)
     return {
         "id": m["id"],
         "name": m["id"],
@@ -703,7 +841,7 @@ async def api_import_recipe(name: str, req: ImportRecipeRequest):
         model_name = recipe.get("model_name", "")
         recipe_label = recipe.get("_name", model_name)
         has_vision = "vision" in recipe.get("labels", [])
-        ctx_size = recipe.get("recipe_options", {}).get("ctx_size", 32768)
+        ctx_size = max(recipe.get("recipe_options", {}).get("ctx_size", 32768) or 32768, 1)
 
         print(f"Importing recipe: {recipe_label}")
 
