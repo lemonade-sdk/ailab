@@ -36,7 +36,8 @@ Hub → Home device:
   {"type": "registered"}
   {"type": "request",   "id": "<uuid>",      "method": "...", "path": "...",
                         "port": 11500, "headers": {...}, "body": "<base64>"}
-  {"type": "ws_open",   "conn_id": "<uuid>", "port": ..., "path": "..."}
+  {"type": "ws_open",   "conn_id": "<uuid>", "port": ..., "path": "...",
+                        "headers": {...}}
   {"type": "ws_frame",  "conn_id": "<uuid>", "opcode": 1|2, "data": "<base64>"}
   {"type": "ws_close",  "conn_id": "<uuid>"}
 """
