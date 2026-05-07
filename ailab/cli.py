@@ -94,7 +94,15 @@ def cmd_packages(args):
 def cmd_web(args):
     import uvicorn
     from .web.app import app
-    print(f"Starting ailab web interface at http://{args.host}:{args.port}")
+    # Wildcard bind addresses aren't valid URLs to click on, so show a
+    # browser-friendly host instead.  IPv6 literals need bracket-wrapping.
+    if args.host in ("::", "0.0.0.0", ""):
+        display_host = "localhost"
+    elif ":" in args.host:
+        display_host = f"[{args.host}]"
+    else:
+        display_host = args.host
+    print(f"Starting ailab web interface at http://{display_host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
 
 
