@@ -802,6 +802,15 @@ def create_container(
             "bind": "host",
         }
 
+    # GPU passthrough: expose host GPUs (and AMD KFD compute device) to the
+    # container.  The "gpu" device type covers /dev/dri render nodes for any
+    # vendor; /dev/kfd is added separately as a unix-char device because LXD's
+    # "gpu" type does not include it.
+    if os.path.exists("/dev/dri"):
+        devices["gpu"] = {"type": "gpu"}
+    if os.path.exists("/dev/kfd"):
+        devices["kfd"] = {"type": "unix-char", "source": "/dev/kfd"}
+
     # ── Build instance config ─────────────────────────────────────────────────
     idmap = f"uid {uid} {uid}\ngid {gid} {gid}"
     config = {
