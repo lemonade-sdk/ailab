@@ -1,19 +1,40 @@
 import { useState, useEffect, useRef } from 'react';
-import { Package, SSEEvent, SystemUser } from '../types';
-import { getPackages, getUsers, createContainerStream } from '../api/client';
+import { LemonadeRecipe, Package, SSEEvent, SystemUser } from '../types';
+import { createContainerStream, getLemonadeDownloadedModels, getLemonadeRecipes, getPackages, getUsers, importRecipeStream } from '../api/client';
 
 interface Props {
   onClose: () => void;
   onDone: () => void;
 }
 
+const VISIBLE_LABELS = new Set(['vision', 'tool-calling']);
+
+function RecipeTag({ label }: { label: string }) {
+  const colours: Record<string, string> = {
+    vision: 'bg-violet-900 text-violet-300',
+    'tool-calling': 'bg-blue-900 text-blue-300',
+  };
+  return (
+    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${colours[label] ?? 'bg-slate-700 text-slate-300'}`}>
+      {label}
+    </span>
+  );
+}
+
 export function CreateModal({ onClose, onDone }: Props) {
   const [name, setName] = useState('');
   const [packages, setPackages] = useState<Package[]>([]);
-  const [selectedPackage, setSelectedPackage] = useState<string>('openclaw');
+  const [selectedPackage, setSelectedPackage] = useState<string>('');
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [selectedUser, setSelectedUser] = useState<string>('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [extraPorts, setExtraPorts] = useState<Array<{ host: string; container: string }>>([]);
+  const [recipes, setRecipes] = useState<LemonadeRecipe[]>([]);
+  const [downloadedModels, setDownloadedModels] = useState<Set<string>>(new Set());
+  const [recipesLoading, setRecipesLoading] = useState(false);
+  const [recipesError, setRecipesError] = useState('');
+  // null = auto-detect (no recipe selected)
+  const [selectedRecipe, setSelectedRecipe] = useState<LemonadeRecipe | null>(null);
   const [log, setLog] = useState('');
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
@@ -23,9 +44,6 @@ export function CreateModal({ onClose, onDone }: Props) {
   useEffect(() => {
     getPackages().then((pkgs) => {
       setPackages(pkgs);
-      if (!pkgs.find((p) => p.name === 'openclaw') && pkgs.length > 0) {
-        setSelectedPackage(pkgs[0].name);
-      }
     }).catch(console.error);
 
     getUsers().then((us) => {
@@ -34,11 +52,27 @@ export function CreateModal({ onClose, onDone }: Props) {
     }).catch(console.error);
   }, []);
 
+  // Fetch recipes whenever openclaw is selected
+  useEffect(() => {
+    if (selectedPackage !== 'openclaw') return;
+    setRecipesLoading(true);
+    setRecipesError('');
+    Promise.all([getLemonadeRecipes(), getLemonadeDownloadedModels()])
+      .then(([r, downloaded]) => {
+        setRecipes(r);
+        setDownloadedModels(new Set(downloaded));
+        setRecipesLoading(false);
+      })
+      .catch((e) => { setRecipesError(String(e)); setRecipesLoading(false); });
+  }, [selectedPackage]);
+
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
   }, [log]);
+
+  const appendLog = (msg: string) => setLog((prev) => prev + msg + '\n');
 
   const addPortRow = () => setExtraPorts((prev) => [...prev, { host: '', container: '' }]);
   const removePortRow = (i: number) => setExtraPorts((prev) => prev.filter((_, idx) => idx !== i));
@@ -57,12 +91,29 @@ export function CreateModal({ onClose, onDone }: Props) {
       .filter((p) => p.host && p.container)
       .map((p) => ({ host_port: parseInt(p.host), container_port: parseInt(p.container) }));
 
+    let createFailed = false;
+
     try {
+      // Phase 1: create container (+ install package)
       await createContainerStream(name.trim(), pkgs, ports, (event: SSEEvent) => {
-        if (event.type === 'log') setLog((prev) => prev + event.msg + '\n');
-        else if (event.type === 'done') setDone(true);
-        else if (event.type === 'error') { setError(event.msg); setDone(true); }
+        if (event.type === 'log') appendLog(event.msg);
+        else if (event.type === 'done') { /* proceed */ }
+        else if (event.type === 'error') { setError(event.msg); createFailed = true; }
       }, selectedUser || undefined);
+
+      if (createFailed) { setDone(true); return; }
+
+      // Phase 2: import recipe (openclaw only, when a recipe is selected)
+      if (selectedPackage === 'openclaw' && selectedRecipe) {
+        appendLog('');
+        appendLog('--- Importing model recipe ---');
+        await importRecipeStream(name.trim(), selectedRecipe, (event: SSEEvent) => {
+          if (event.type === 'log') appendLog(event.msg);
+          else if (event.type === 'error') setError(event.msg);
+        });
+      }
+
+      setDone(true);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -86,7 +137,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               onChange={(e) => setName(e.target.value)}
               disabled={running}
               placeholder="mybox"
-              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
             />
           </div>
 
@@ -97,7 +148,7 @@ export function CreateModal({ onClose, onDone }: Props) {
                 value={selectedUser}
                 onChange={(e) => setSelectedUser(e.target.value)}
                 disabled={running}
-                className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+                className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
               >
                 <option value="">— select user —</option>
                 {users.map((u) => (
@@ -115,7 +166,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               value={selectedPackage}
               onChange={(e) => setSelectedPackage(e.target.value)}
               disabled={running}
-              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm disabled:opacity-50"
+              className="w-full bg-slate-700 text-white px-3 py-2 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-lemon-500 text-sm disabled:opacity-50"
             >
               <option value="">— none (bare container) —</option>
               {packages.filter((pkg) => !['nullclaw', 'picoclaw'].includes(pkg.name)).map((pkg) => (
@@ -126,35 +177,112 @@ export function CreateModal({ onClose, onDone }: Props) {
             </select>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-sm text-slate-300">Extra ports (HOST:CONTAINER)</label>
-              <button
-                onClick={addPortRow}
-                disabled={running}
-                className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
-              >
-                + Add port
-              </button>
+          {selectedPackage === 'openclaw' && (
+            <div>
+              <label className="block text-sm text-slate-300 mb-2">Model</label>
+              {recipesLoading ? (
+                <p className="text-sm text-slate-400">Loading available models…</p>
+              ) : recipesError ? (
+                <p className="text-sm text-amber-400">
+                  Could not load model list — auto-detect will be used
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedRecipe === null ? 'border-lemon-500/60 bg-lemon-500/10' : 'border-slate-600 hover:border-slate-500'}`}>
+                    <input type="radio" name="recipe" checked={selectedRecipe === null} onChange={() => setSelectedRecipe(null)} disabled={running} className="sr-only" />
+                    <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${selectedRecipe === null ? 'border-lemon-500' : 'border-slate-500'}`}>
+                      {selectedRecipe === null && <div className="w-2 h-2 rounded-full bg-lemon-500" />}
+                    </div>
+                    <div>
+                      <div className="text-white text-sm font-medium">Auto-detect</div>
+                      <div className="text-slate-400 text-xs mt-0.5">
+                        Use whichever model lemonade-server currently has loaded
+                      </div>
+                    </div>
+                  </label>
+
+                  {recipes.map((recipe) => {
+                    const isSelected = selectedRecipe?._name === recipe._name;
+                    const isDownloaded = recipe.model_name ? downloadedModels.has(recipe.model_name) : false;
+                    const visibleLabels = (recipe.labels ?? []).filter((l) => VISIBLE_LABELS.has(l));
+                    return (
+                      <label
+                        key={recipe._name}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isSelected ? 'border-lemon-500/60 bg-lemon-500/10' : 'border-slate-600 hover:border-slate-500'}`}
+                      >
+                        <input type="radio" name="recipe" checked={isSelected} onChange={() => setSelectedRecipe(recipe)} disabled={running} className="sr-only" />
+                        <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'border-lemon-500' : 'border-slate-500'}`}>
+                          {isSelected && <div className="w-2 h-2 rounded-full bg-lemon-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-white text-sm font-medium">{recipe._name}</span>
+                            {isDownloaded && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-teal-900 text-teal-300 font-medium">
+                                downloaded
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            {recipe.size != null && (
+                              <span className="text-slate-400 text-xs">{recipe.size} GB</span>
+                            )}
+                            {visibleLabels.map((label) => (
+                              <RecipeTag key={label} label={label} />
+                            ))}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            {extraPorts.map((p, i) => (
-              <div key={i} className="flex gap-2 mb-2">
-                <input
-                  value={p.host}
-                  onChange={(e) => updatePort(i, 'host', e.target.value)}
-                  placeholder="Host port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-                <span className="text-slate-500 self-center">:</span>
-                <input
-                  value={p.container}
-                  onChange={(e) => updatePort(i, 'container', e.target.value)}
-                  placeholder="Container port"
-                  className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-                <button onClick={() => removePortRow(i)} className="text-slate-500 hover:text-red-400 px-1">✕</button>
+          )}
+
+          <div className="border-t border-slate-700 pt-2">
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <svg className={`w-3 h-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+              Advanced
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm text-slate-300">Extra ports (HOST:CONTAINER)</label>
+                  <button
+                    onClick={addPortRow}
+                    disabled={running}
+                    className="text-xs text-lemon-500 hover:text-lemon-400 disabled:opacity-50"
+                  >
+                    + Add port
+                  </button>
+                </div>
+                {extraPorts.map((p, i) => (
+                  <div key={i} className="flex gap-2 mb-2">
+                    <input
+                      value={p.host}
+                      onChange={(e) => updatePort(i, 'host', e.target.value)}
+                      placeholder="Host port"
+                      className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
+                    />
+                    <span className="text-slate-500 self-center">:</span>
+                    <input
+                      value={p.container}
+                      onChange={(e) => updatePort(i, 'container', e.target.value)}
+                      placeholder="Container port"
+                      className="flex-1 bg-slate-700 text-white px-3 py-1.5 rounded border border-slate-600 text-sm focus:outline-none focus:ring-1 focus:ring-lemon-500"
+                    />
+                    <button onClick={() => removePortRow(i)} className="text-slate-500 hover:text-red-400 px-1">✕</button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
 
           {log && (
@@ -176,7 +304,7 @@ export function CreateModal({ onClose, onDone }: Props) {
           {done ? (
             <button
               onClick={onDone}
-              className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium"
+              className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
             >
               Done
             </button>
@@ -192,7 +320,7 @@ export function CreateModal({ onClose, onDone }: Props) {
               <button
                 onClick={handleSubmit}
                 disabled={running || !name.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2 rounded-lg text-sm font-medium"
+                className="bg-lemon-500 hover:bg-lemon-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-semibold px-5 py-2 rounded-lg text-sm"
               >
                 {running ? 'Creating…' : 'Create'}
               </button>

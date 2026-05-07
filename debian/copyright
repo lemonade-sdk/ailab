@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: ailab
-Source: https://github.com/kenvandine/ailab
+Source: https://github.com/lemonade-sdk/ailab
 
 Files: *
 Copyright: 2026 Ken VanDine and contributors

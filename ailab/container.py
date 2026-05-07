@@ -355,6 +355,11 @@ def push_file(cname: str, remote_path: str, content: bytes | str):
     _get_instance(cname).files.put(remote_path, content)
 
 
+def pull_file(cname: str, remote_path: str) -> bytes:
+    """Read a file from inside the container via the LXD files API."""
+    return _get_instance(cname).files.get(remote_path)
+
+
 # ── Environment variables ─────────────────────────────────────────────────────
 
 def set_container_env(cname: str, env: dict[str, str], profile_name: str | None = None):

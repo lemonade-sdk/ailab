@@ -4,7 +4,11 @@ import asyncio
 import io
 import json
 import logging
+import socket as _socket
 import sys
+import time as _time
+import urllib.error as _urllib_error
+import urllib.request as _urllib_request
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +38,8 @@ from ailab.container import (
     delete_container,
     get_container_user,
     list_system_users,
+    pull_file,
+    push_file,
     remove_proxy_device,
     start_container,
     stop_container,
@@ -47,6 +53,27 @@ from ailab.installers.openclaw import (
 # ── App setup ─────────────────────────────────────────────────────────────────
 
 logger = logging.getLogger("ailab.web")
+
+# ── Lemonade recipes cache ────────────────────────────────────────────────────
+
+_RECIPES_GITHUB_API = (
+    "https://api.github.com/repos/kenvandine/recipes/contents/openclaw"
+    "?ref=openclaw_recipes"
+)
+_RECIPES_CACHE_TTL = 300  # 5 minutes
+_recipes_cache: list | None = None
+_recipes_cache_ts: float = 0.0
+
+
+def _detect_lemonade_port() -> int | None:
+    """Return the first reachable lemonade-server port (13305 or 8000), or None."""
+    for port in [13305, 8000]:
+        try:
+            with _socket.create_connection(("127.0.0.1", port), timeout=2):
+                return port
+        except OSError:
+            pass
+    return None
 
 app = FastAPI(title="ailab web interface")
 
@@ -78,6 +105,10 @@ class AddPortRequest(BaseModel):
     host_port: int
     container_port: int
     direction: str = "outbound"
+
+
+class ImportRecipeRequest(BaseModel):
+    recipe: dict
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -477,6 +508,315 @@ async def api_list_packages():
 async def api_list_users():
     """Return host users with UID >= 1000 (candidates for container mapping)."""
     return list_system_users()
+
+
+# ── Lemonade recipes ──────────────────────────────────────────────────────────
+
+
+@app.get("/api/containers/{name}/openclaw/model")
+async def api_openclaw_model(name: str):
+    """Return the primary model configured in openclaw.json, if present."""
+    cname = _container_name(name)
+
+    def _read():
+        username, uid, gid, home = get_container_user(cname)
+        raw = pull_file(cname, f"{home}/.openclaw/openclaw.json")
+        config = json.loads(raw)
+        primary = (
+            config
+            .get("agents", {})
+            .get("defaults", {})
+            .get("model", {})
+            .get("primary", "")
+        )
+        if not primary:
+            raise HTTPException(status_code=404, detail="No model configured")
+        return {"model": primary}
+
+    try:
+        return await asyncio.to_thread(_read)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="openclaw not configured")
+
+
+@app.get("/api/lemonade/downloaded-models")
+async def api_lemonade_downloaded_models():
+    """Return a list of model IDs that are already downloaded in lemonade-server."""
+    def _fetch() -> list[str]:
+        port = _detect_lemonade_port()
+        if port is None:
+            return []
+        req = _urllib_request.Request(
+            f"http://127.0.0.1:{port}/api/v1/models",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with _urllib_request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            return [m["id"] for m in data.get("data", []) if m.get("id")]
+        except Exception as exc:
+            logger.warning("Could not fetch lemonade downloaded models: %s", exc)
+            return []
+
+    return {"downloaded": await asyncio.to_thread(_fetch)}
+
+
+@app.get("/api/lemonade/recipes")
+async def api_lemonade_recipes():
+    """Fetch openclaw-recommended lemonade recipes from GitHub (cached 5 min)."""
+    global _recipes_cache, _recipes_cache_ts
+    now = _time.time()
+    if _recipes_cache is not None and (now - _recipes_cache_ts) < _RECIPES_CACHE_TTL:
+        return _recipes_cache
+
+    def _fetch_recipes() -> list:
+        def _get_json(url: str, timeout: int = 15) -> object:
+            req = _urllib_request.Request(
+                url,
+                headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "ailab"},
+            )
+            with _urllib_request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+
+        files = _get_json(_RECIPES_GITHUB_API)
+        recipes = []
+        for file_info in files:
+            if not file_info["name"].endswith(".json"):
+                continue
+            try:
+                recipe = _get_json(file_info["download_url"], timeout=10)
+                recipe["_name"] = file_info["name"].removesuffix(".json")
+                recipes.append(recipe)
+            except Exception as exc:
+                logger.warning("Skipping recipe %s: %s", file_info["name"], exc)
+        recipes.sort(key=lambda r: r.get("size", 999))
+        return recipes
+
+    try:
+        recipes = await asyncio.to_thread(_fetch_recipes)
+        _recipes_cache = recipes
+        _recipes_cache_ts = now
+        return recipes
+    except Exception as exc:
+        logger.warning("Failed to fetch lemonade recipes: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Failed to fetch recipes: {exc}")
+
+
+def _stream_lemonade_pull(resp, model_name: str) -> None:
+    """Read lemonade's SSE pull stream and print human-readable progress.
+
+    Lemonade emits named SSE events:
+      event: progress  data: {file, file_index, total_files, bytes_downloaded,
+                               bytes_total, percent, ...}
+      event: complete  data: {file, ..., percent: 100}  (or {status: "ok"})
+      event: error     data: {error: "message"}
+    """
+    event_type = "message"
+    last_pct: dict[str, float] = {}  # file -> last printed percent
+
+    while True:
+        line = resp.readline()
+        if not line:
+            break
+        line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+
+        if line.startswith("event: "):
+            event_type = line[7:].strip()
+        elif line.startswith("data: "):
+            data_str = line[6:]
+            try:
+                d = json.loads(data_str)
+            except Exception:
+                event_type = "message"
+                continue
+
+            if event_type == "progress":
+                pct = float(d.get("percent", 0))
+                fname = d.get("file", "")
+                fidx = d.get("file_index", 1)
+                ftotal = d.get("total_files", 1)
+                prev = last_pct.get(fname, -11.0)
+
+                if fname not in last_pct:
+                    print(f"  Downloading file {fidx}/{ftotal}: {fname}")
+
+                if pct - prev >= 10.0:
+                    last_pct[fname] = pct
+                    bdl = d.get("bytes_downloaded", 0)
+                    btot = d.get("bytes_total", 0)
+                    if btot > 0:
+                        mb_dl = bdl / (1024 * 1024)
+                        mb_tot = btot / (1024 * 1024)
+                        print(f"    {pct:.0f}%  ({mb_dl:.0f} / {mb_tot:.0f} MB)")
+                    else:
+                        print(f"    {pct:.0f}%")
+
+            elif event_type == "complete":
+                fname = d.get("file", "")
+                if fname:
+                    print(f"  Downloaded: {fname}")
+                else:
+                    print(f"  Model registered: {model_name}")
+
+            elif event_type == "error":
+                err = d.get("error", data_str)
+                print(f"  Warning: lemonade error: {err} (non-fatal)")
+
+            event_type = "message"
+
+
+def _lemonade_model_entry(m: dict) -> dict:
+    """Build an openclaw model config dict from a lemonade /api/v1/models entry."""
+    labels = m.get("labels") or []
+    ctx_size = (m.get("recipe_options") or {}).get("ctx_size", 32768)
+    return {
+        "id": m["id"],
+        "name": m["id"],
+        "reasoning": False,
+        "input": ["text", "image"] if "vision" in labels else ["text"],
+        "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        "contextWindow": ctx_size,
+        "maxTokens": 8192,
+    }
+
+
+def _fetch_lemonade_models(port: int) -> list[dict]:
+    """Return openclaw model dicts for all models downloaded in lemonade-server."""
+    req = _urllib_request.Request(
+        f"http://127.0.0.1:{port}/api/v1/models",
+        headers={"Accept": "application/json"},
+    )
+    with _urllib_request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+    return [_lemonade_model_entry(m) for m in data.get("data", []) if m.get("id")]
+
+
+@app.post("/api/containers/{name}/openclaw/import-recipe")
+async def api_import_recipe(name: str, req: ImportRecipeRequest):
+    """Import a lemonade recipe into lemonade-server and configure openclaw to use it."""
+    cname = _container_name(name)
+    recipe = req.recipe
+
+    def task():
+        model_name = recipe.get("model_name", "")
+        recipe_label = recipe.get("_name", model_name)
+        has_vision = "vision" in recipe.get("labels", [])
+        ctx_size = recipe.get("recipe_options", {}).get("ctx_size", 32768)
+
+        print(f"Importing recipe: {recipe_label}")
+
+        port = _detect_lemonade_port()
+        if port is None:
+            print(
+                "  Warning: lemonade-server not reachable — openclaw will be configured"
+                " for this model; run lemonade pull to download it when lemonade starts"
+            )
+        else:
+            print(f"  lemonade-server detected on port {port}")
+
+            # Build the pull request: map recipe checkpoints format to lemonade's
+            # pull API (POST /api/v1/pull), which registers the recipe in
+            # user_models.json and downloads the model from HuggingFace.
+            pull_data: dict = {"model_name": model_name}
+            checkpoints = recipe.get("checkpoints")
+            if checkpoints:
+                pull_data["checkpoint"] = checkpoints.get("main", "")
+                if "mmproj" in checkpoints:
+                    pull_data["mmproj"] = checkpoints["mmproj"]
+            elif "checkpoint" in recipe:
+                pull_data["checkpoint"] = recipe["checkpoint"]
+
+            for field in ("recipe", "recipe_options", "labels", "size"):
+                if field in recipe:
+                    pull_data[field] = recipe[field]
+
+            size_gb = recipe.get("size")
+            size_str = f" (~{size_gb} GB)" if size_gb else ""
+            print(f"  Registering {model_name} with lemonade-server{size_str}...")
+            pull_data["stream"] = True
+            try:
+                data = json.dumps(pull_data).encode()
+                http_req = _urllib_request.Request(
+                    f"http://127.0.0.1:{port}/api/v1/pull",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with _urllib_request.urlopen(http_req, timeout=7200) as resp:
+                    _stream_lemonade_pull(resp, model_name)
+            except _urllib_error.HTTPError as e:
+                body = e.read().decode(errors="replace")
+                print(f"  Warning: lemonade pull returned {e.code}: {body} (non-fatal)")
+            except Exception as e:
+                print(f"  Warning: could not register model with lemonade: {e} (non-fatal)")
+
+        lemonade_port = port or 13305
+        username, uid, gid, home = get_container_user(cname)
+        openclaw_json_path = f"{home}/.openclaw/openclaw.json"
+
+        # Fetch all currently-downloaded models from lemonade so we can
+        # populate the full list in openclaw.
+        all_lemonade_models: list[dict] = []
+        if port is not None:
+            try:
+                all_lemonade_models = _fetch_lemonade_models(port)
+                print(f"  Found {len(all_lemonade_models)} downloaded model(s) in lemonade")
+            except Exception as e:
+                print(f"  Warning: could not enumerate lemonade models: {e}")
+
+        # Fall back to just the current recipe if lemonade wasn't reachable.
+        current_entry = {
+            "id": model_name,
+            "name": model_name,
+            "reasoning": False,
+            "input": ["text", "image"] if has_vision else ["text"],
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            "contextWindow": ctx_size,
+            "maxTokens": 8192,
+        }
+        if not all_lemonade_models:
+            all_lemonade_models = [current_entry]
+        else:
+            # Ensure the newly-imported model is first (and not duplicated).
+            model_list = [m for m in all_lemonade_models if m["id"] != model_name]
+            model_list.insert(0, current_entry)
+            all_lemonade_models = model_list
+
+        # Read current openclaw.json from inside the container, patch it on the
+        # host, and write it back — avoids running a script inside the container.
+        try:
+            raw = pull_file(cname, openclaw_json_path)
+            config = json.loads(raw)
+        except Exception:
+            config = {"gateway": {"mode": "local", "auth": {"mode": "token"}}}
+
+        # Set models section: mode=replace, lemonade provider only
+        # (replaces any pre-existing remote providers such as anthropic/openai).
+        models_section = config.setdefault("models", {})
+        models_section["mode"] = "replace"
+        models_section["providers"] = {
+            "lemonade": {
+                "baseUrl": f"http://127.0.0.1:{lemonade_port}/api/v1",
+                "apiKey": "lemonade",
+                "api": "openai-completions",
+                "models": all_lemonade_models,
+            }
+        }
+
+        # Set as primary model.
+        (
+            config
+            .setdefault("agents", {})
+            .setdefault("defaults", {})
+            .setdefault("model", {})
+        )["primary"] = f"lemonade/{model_name}"
+
+        push_file(cname, openclaw_json_path, json.dumps(config, indent=2) + "\n")
+        print(f"openclaw configured: primary model = lemonade/{model_name}")
+
+    return _sse_stream(task)
 
 
 # ── WebSocket: PTY shell ──────────────────────────────────────────────────────

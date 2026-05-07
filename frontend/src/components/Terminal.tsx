@@ -54,6 +54,7 @@ export function Terminal({ containerName, onClose }: Props) {
       if (term.cols > 0 && term.rows > 0) {
         connectWs();
       }
+      term.focus();
     });
 
     const ro = new ResizeObserver(() => {
