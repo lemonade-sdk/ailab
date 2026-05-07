@@ -53,7 +53,7 @@ class OpenclawInstaller:
             start_container(cname)
 
         print("Installing openclaw via npm...")
-        self._npm_install(cname, uid)
+        self._npm_install(cname, uid, gid, home)
 
         print("Installing openclaw gateway user service...")
         self._install_gateway_service(cname, uid, gid, home)
@@ -99,7 +99,7 @@ class OpenclawInstaller:
         """Install openclaw's gateway as a user-level systemd service (unit only; do not enable yet)."""
         container_exec(
             cname,
-            ["bash", "-c", "openclaw gateway install 2>&1 || true"],
+            ["bash", "-lc", "openclaw gateway install 2>&1 || true"],
             uid=uid, gid=gid,
             env={"HOME": home},
             check=False,
@@ -195,8 +195,12 @@ class OpenclawInstaller:
         The drop-in ensures the gateway service always starts with the correct
         token, regardless of how the user session was started.
         """
+        npm_bin = f"{home}/.npm-global/bin"
         env_dir = Path(home) / ".config" / "environment.d"
-        conf = f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+        conf = (
+            f"OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+            f"NPM_CONFIG_PREFIX={home}/.npm-global\n"
+        )
         # Write environment.d for CLI / login-shell use
         container_exec(
             cname,
@@ -205,12 +209,15 @@ class OpenclawInstaller:
             env={"HOME": home},
             stdin=conf.encode(),
         )
-        # Write a systemd service drop-in so the daemon always has the token,
+        # Write a systemd service drop-in so the daemon always has the token
+        # and can find the openclaw binary in the user-local npm prefix,
         # even in a lingering session where environment.d may not be sourced.
         dropin_dir = Path(home) / ".config" / "systemd" / "user" / "openclaw-gateway.service.d"
         dropin = (
             "[Service]\n"
             f"Environment=OPENCLAW_GATEWAY_TOKEN={gateway_token}\n"
+            f"Environment=NPM_CONFIG_PREFIX={home}/.npm-global\n"
+            f'Environment=PATH={npm_bin}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n'
         )
         container_exec(
             cname,
@@ -302,7 +309,7 @@ systemctl --user start openclaw-gateway 2>/dev/null || true
 """
         container_exec(
             cname,
-            ["bash", "-c", script],
+            ["bash", "-lc", script],
             uid=uid, gid=gid,
             env=env,
             check=False,
@@ -422,12 +429,31 @@ openclaw() {{
             stdin=stdout.encode(),
         )
 
-    def _npm_install(self, cname: str, uid: int):
-        """Install openclaw globally via npm inside the container (as root)."""
+    def _npm_install(self, cname: str, uid: int, gid: int, home: str):
+        """Install openclaw via npm into a user-writable prefix."""
+        prefix = f"{home}/.npm-global"
         container_exec(
             cname,
-            ["npm", "install", "-g", "openclaw"],
-            env={"HOME": "/root"},
+            ["bash", "-c", f"mkdir -p {prefix}"],
+            uid=uid, gid=gid,
+            env={"HOME": home},
+        )
+        container_exec(
+            cname,
+            ["npm", "install", "-g", f"--prefix={prefix}", "openclaw"],
+            uid=uid, gid=gid,
+            env={"HOME": home},
+        )
+        # Ensure the user-local npm bin is on PATH for all login shells
+        snippet = (
+            f'\n# npm user-global prefix\n'
+            f'export NPM_CONFIG_PREFIX="{prefix}"\n'
+            f'export PATH="{prefix}/bin:$PATH"\n'
+        )
+        container_exec(
+            cname,
+            ["bash", "-c", "cat >> /etc/profile.d/ailab-openclaw.sh"],
+            stdin=snippet.encode(),
         )
 
     def _add_port_proxy(self, cname: str):
