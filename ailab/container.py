@@ -806,10 +806,24 @@ def create_container(
     # container.  The "gpu" device type covers /dev/dri render nodes for any
     # vendor; /dev/kfd is added separately as a unix-char device because LXD's
     # "gpu" type does not include it.
+    # uid/gid/mode make LXD expose the device nodes inside the container owned
+    # by the mapped user, so the user account has read/write access without
+    # needing render/video group membership.
     if os.path.exists("/dev/dri"):
-        devices["gpu"] = {"type": "gpu"}
+        devices["gpu"] = {
+            "type": "gpu",
+            "uid": str(uid),
+            "gid": str(gid),
+            "mode": "0660",
+        }
     if os.path.exists("/dev/kfd"):
-        devices["kfd"] = {"type": "unix-char", "source": "/dev/kfd"}
+        devices["kfd"] = {
+            "type": "unix-char",
+            "source": "/dev/kfd",
+            "uid": str(uid),
+            "gid": str(gid),
+            "mode": "0660",
+        }
 
     # ── Build instance config ─────────────────────────────────────────────────
     idmap = f"uid {uid} {uid}\ngid {gid} {gid}"
