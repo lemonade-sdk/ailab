@@ -110,7 +110,6 @@ Create a new sandbox container. This:
 - Sets up proxy devices so `localhost:8000` / `localhost:13305` (lemonade)
   and `localhost:11434` (ollama) inside the container reach the corresponding
   services on your host
-- Forwards common web UI ports to your host browser
 - Pre-installs: python3, pip, nodejs, npm, bun, homebrew
 
 ```bash
@@ -400,8 +399,10 @@ ailab new experiments --install openclaw
 **Persistence**: Containers persist between reboots. LXD starts them
 automatically. `ailab run` starts a stopped container before opening a shell.
 
-**Reinstalling a package**: Just re-run `ailab install`. Config directories
-are separate, so reinstalling updates the binary and rewrites config.
+**Reinstalling a package**: Just re-run `ailab install`. `snap install` is a
+no-op if the package is already installed (snapd's usual `snap refresh`
+handles picking up new versions), but the onboard command and post-install
+script both re-run, so it's an easy way to refresh a package's config.
 
 **LXD console**: You can also access containers directly:
 ```bash

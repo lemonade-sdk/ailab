@@ -192,9 +192,8 @@ examples:
         description=(
             "Create a new LXD sandbox based on ubuntu:devel with:\n"
             "  • Your home directory mounted\n"
-            "  • lemonade-server (port 8000) and ollama (port 11434)\n"
+            "  • lemonade-server (port 8000 or 13305) and ollama (port 11434)\n"
             "    proxied so they appear local inside the container\n"
-            "  • Common web UI ports forwarded to your host browser\n"
             "  • python3-venv, pip, nodejs, npm, bun, homebrew pre-installed"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
