@@ -603,10 +603,17 @@ async def api_gateway_pair(name: str, request: Request):
 
 @app.get("/api/packages")
 async def api_list_packages():
-    return [
-        {"name": name, "description": cls().description}
-        for name, cls in sorted(INSTALLERS.items())
-    ]
+    catalog = await asyncio.to_thread(appstore.get_catalog)
+    result = []
+    for name, cls in sorted(INSTALLERS.items()):
+        inst = cls()
+        snap = appstore.get_snap(catalog, inst.app_id)
+        result.append({
+            "name": name,
+            "description": inst.description,
+            "ports": appstore.get_ports(snap) if snap else [],
+        })
+    return result
 
 
 @app.get("/api/users")

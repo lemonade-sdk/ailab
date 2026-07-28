@@ -16,6 +16,7 @@ export interface PortProxy {
 export interface Package {
   name: string;
   description: string;
+  ports: number[];
 }
 
 export interface SystemUser {

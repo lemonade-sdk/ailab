@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Container } from '../types';
-import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
+import { Container, Package } from '../types';
+import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPackages, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
 import { SSEEvent } from '../types';
 
 interface Props {
@@ -14,18 +14,16 @@ interface Props {
   modelRefreshTick: number;
 }
 
-// Known tool gateway ports — containers with these ports have an app installed.
-const GATEWAY_PORTS: Record<number, string> = {
-  18789: 'openclaw',
-  3000:  'nullclaw',
-  18800: 'picoclaw',
-};
-
-// Port used by openclaw — URL includes an auth token so it's always fetched from the API.
-const OPENCLAW_PORT_FOR_URL = 18789;
-
-// Port used by openclaw — used to detect whether to fetch the configured model.
-const OPENCLAW_PORT = 18789;
+/** Build a port -> package-name map from the app catalog (via /api/packages). */
+function gatewayPortsFromPackages(packages: Package[]): Record<number, string> {
+  const map: Record<number, string> = {};
+  for (const pkg of packages) {
+    for (const port of pkg.ports) {
+      map[port] = pkg.name;
+    }
+  }
+  return map;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const isRunning = status.toLowerCase() === 'running';
@@ -107,7 +105,7 @@ function PairModal({ name, onClose, onPaired }: { name: string; onClose: () => v
   );
 }
 
-function GatewayButton({ name, port, label }: { name: string; port: number; label: string }) {
+function GatewayButton({ name, port, label, openclawPort }: { name: string; port: number; label: string; openclawPort: number | null }) {
   const [url, setUrl] = useState<string | null>(null);
   const [notPaired, setNotPaired] = useState(false);
   const [showPairModal, setShowPairModal] = useState(false);
@@ -115,7 +113,7 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
 
   const fetchUrl = () => {
     setLoading(true);
-    if (port !== OPENCLAW_PORT_FOR_URL) {
+    if (port !== openclawPort) {
       // Non-token ports: ask the server for the base URL so tunnel routing works.
       getPortBaseUrl()
         .then((base) => setUrl(`${base}:${port}`))
@@ -203,6 +201,8 @@ function displayModel(model: string): string {
 
 interface CardProps {
   container: Container;
+  gatewayPorts: Record<number, string>;
+  openclawPort: number | null;
   onShell: (name: string) => void;
   onLogs: (name: string) => void;
   onPorts: (name: string) => void;
@@ -216,16 +216,17 @@ interface CardProps {
 
 function ContainerCard({
   container: c,
+  gatewayPorts, openclawPort,
   onShell, onLogs, onPorts, onInstall, onChangeModel,
   onStart, onStop, onDelete, modelRefreshTick,
 }: CardProps) {
   const running = c.status.toLowerCase() === 'running';
   const gateways = c.outbound_ports
-    .filter((p) => p in GATEWAY_PORTS)
-    .map((p) => ({ port: p, label: GATEWAY_PORTS[p] }));
+    .filter((p) => p in gatewayPorts)
+    .map((p) => ({ port: p, label: gatewayPorts[p] }));
 
   const hasApp = gateways.length > 0;
-  const hasOpenclaw = c.outbound_ports.includes(OPENCLAW_PORT);
+  const hasOpenclaw = openclawPort !== null && c.outbound_ports.includes(openclawPort);
 
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -249,7 +250,7 @@ function ContainerCard({
       {running && gateways.length > 0 && (
         <div className="flex flex-col gap-1.5">
           {gateways.map(({ port, label }) => (
-            <GatewayButton key={port} name={c.name} port={port} label={label} />
+            <GatewayButton key={port} name={c.name} port={port} label={label} openclawPort={openclawPort} />
           ))}
         </div>
       )}
@@ -390,6 +391,11 @@ function ConfirmModal({ message, onConfirm, onCancel }: { message: string; onCon
 
 export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh, modelRefreshTick }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [packages, setPackages] = useState<Package[]>([]);
+
+  useEffect(() => {
+    getPackages().then(setPackages).catch(() => setPackages([]));
+  }, []);
 
   if (containers.length === 0) {
     return (
@@ -399,6 +405,9 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
       </div>
     );
   }
+
+  const gatewayPorts = gatewayPortsFromPackages(packages);
+  const openclawPort = packages.find((p) => p.name === 'openclaw')?.ports[0] ?? null;
 
   const handleStart = async (name: string) => {
     try { await startContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
@@ -418,6 +427,8 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
           <ContainerCard
             key={c.name}
             container={c}
+            gatewayPorts={gatewayPorts}
+            openclawPort={openclawPort}
             onShell={onShell}
             onLogs={onLogs}
             onPorts={onPorts}
