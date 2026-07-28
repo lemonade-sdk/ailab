@@ -1,7 +1,17 @@
 #!/bin/bash
-# Called by snapd whenever 'snap set ailab ...' is used.
+# Called by snapd on install/refresh and whenever 'snap set ailab ...' is used.
 # Validates web.host and web.port and restarts the web daemon.
 set -euo pipefail
+
+# The `ailab` CLI app runs as the invoking user (not the root `ailab.web`
+# daemon), but both share data under $SNAP_COMMON. That directory is
+# root:root 0755 by default, so a plain user's first `ailab new` would fail
+# to mkdir under it. Pre-create the two subdirectories the CLI writes into
+# and make them sticky + world-writable (like /tmp) so any local user can
+# create their own subdirectory, while the sticky bit stops them touching
+# each other's.
+mkdir -p "$SNAP_COMMON/homes" "$SNAP_COMMON/containers"
+chmod 1777 "$SNAP_COMMON/homes" "$SNAP_COMMON/containers"
 
 HOST=$(snapctl get web.host)
 PORT=$(snapctl get web.port)
