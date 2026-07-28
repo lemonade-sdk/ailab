@@ -1181,6 +1181,18 @@ def create_container(
 
 # ── Port management ───────────────────────────────────────────────────────────
 
+def _find_outbound_proxy_device(instance, host_port: int) -> str | None:
+    """Return the name of an existing outbound proxy device listening on
+    host_port (whether ailab created it for a custom port or as part of a
+    package install), or None if the port isn't proxied yet."""
+    for dev_name, cfg in instance.expanded_devices.items():
+        if cfg.get("type") != "proxy" or cfg.get("bind", "host") != "host":
+            continue
+        if cfg.get("listen", "").rsplit(":", 1)[-1] == str(host_port):
+            return dev_name if dev_name in instance.devices else None
+    return None
+
+
 def add_port(
     name: str,
     host_port: int,
@@ -1203,15 +1215,26 @@ def add_port(
         sys.exit(1)
 
     if direction == "outbound":
-        dev_name = f"proxy-out-custom-{host_port}"
-        ok = add_proxy_device(cname, dev_name,
-                               f"tcp:{bind_host}:{host_port}",
-                               f"tcp:127.0.0.1:{container_port}",
-                               bind="host")
-        if not ok:
-            print(f"Error: port {host_port} is already in use on the host.")
-            sys.exit(1)
-        print(f"Added outbound proxy: {bind_host}:{host_port} → container:{container_port}")
+        instance = _get_instance(cname)
+        new_listen = f"tcp:{bind_host}:{host_port}"
+        new_connect = f"tcp:127.0.0.1:{container_port}"
+        existing = _find_outbound_proxy_device(instance, host_port)
+        if existing:
+            cfg = instance.devices[existing]
+            if cfg.get("listen") == new_listen and cfg.get("connect") == new_connect:
+                print(f"Outbound proxy already listening on {bind_host}:{host_port} → container:{container_port}.")
+            else:
+                instance.devices[existing]["listen"] = new_listen
+                instance.devices[existing]["connect"] = new_connect
+                instance.save(wait=True)
+                print(f"Updated existing proxy '{existing}': now {bind_host}:{host_port} → container:{container_port}")
+        else:
+            dev_name = f"proxy-out-custom-{host_port}"
+            ok = add_proxy_device(cname, dev_name, new_listen, new_connect, bind="host")
+            if not ok:
+                print(f"Error: port {host_port} is already in use on the host.")
+                sys.exit(1)
+            print(f"Added outbound proxy: {bind_host}:{host_port} → container:{container_port}")
         if bind_host not in ("127.0.0.1", "localhost", "::1"):
             print(f"Warning: listening on {bind_host} exposes this service to "
                   "anyone who can reach that address — only do this on a trusted network.")
@@ -1225,16 +1248,33 @@ def add_port(
 
 
 def remove_port(name: str, host_port: int, direction: str = "outbound"):
-    """Remove a custom port proxy from a container."""
+    """Remove a custom port proxy, or narrow a widened outbound proxy back to loopback."""
     cname = _container_name(name)
     if _container_status(cname) == "missing":
         print(f"Container '{name}' not found.")
         sys.exit(1)
 
-    dev_name = (f"proxy-out-custom-{host_port}" if direction == "outbound"
-                else f"proxy-in-custom-{host_port}")
-    remove_proxy_device(cname, dev_name)
-    print(f"Removed proxy device '{dev_name}'")
+    if direction == "outbound":
+        instance = _get_instance(cname)
+        existing = _find_outbound_proxy_device(instance, host_port)
+        if not existing:
+            print(f"No outbound proxy found on host port {host_port}.")
+            return
+        if existing.startswith("proxy-out-custom-"):
+            remove_proxy_device(cname, existing)
+            print(f"Removed proxy device '{existing}'")
+        else:
+            # A package-installed proxy (e.g. from `ailab install`) — narrow
+            # its bind back to loopback rather than deleting it outright,
+            # since that would drop the package's own port forwarding.
+            container_port = instance.devices[existing].get("connect", "").rsplit(":", 1)[-1]
+            instance.devices[existing]["listen"] = f"tcp:127.0.0.1:{host_port}"
+            instance.save(wait=True)
+            print(f"Narrowed '{existing}' back to 127.0.0.1:{host_port} → container:{container_port}")
+    else:
+        dev_name = f"proxy-in-custom-{host_port}"
+        remove_proxy_device(cname, dev_name)
+        print(f"Removed proxy device '{dev_name}'")
 
 
 def list_ports(name: str):
