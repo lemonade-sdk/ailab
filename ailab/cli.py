@@ -141,7 +141,24 @@ def cmd_web(args):
     # dashboard-URL logging and tunnel auth injection.
     os.environ["AILAB_WEB_PORT"] = str(args.port)
 
-    from .web.app import API_TOKEN, app
+    try:
+        from .web.app import API_TOKEN, app
+    except PermissionError:
+        from .web.auth import token_file_path
+
+        print(f"Error: permission denied writing the web API token at {token_file_path()}.")
+        print()
+        if os.environ.get("SNAP"):
+            print("Under the snap, the web interface already runs as a background")
+            print("service owned by root, so you don't need to (and can't) start it")
+            print("as yourself. Get its dashboard URL with:")
+            print()
+            print("  sudo ailab dashboard")
+            print()
+            print("To run `ailab web` directly instead of using the service, use sudo.")
+        else:
+            print(f"Check that you own (or can write to) {token_file_path()}.")
+        sys.exit(1)
 
     # Wildcard bind addresses aren't valid URLs to click on, so show a
     # browser-friendly host instead.  IPv6 literals need bracket-wrapping.
