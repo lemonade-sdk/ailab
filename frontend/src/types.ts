@@ -25,6 +25,12 @@ export interface SystemUser {
   home: string;
 }
 
+export interface HostStatus {
+  lemonade: { reachable: boolean; port: number | null };
+  ollama: { reachable: boolean };
+  cloud: { configured: boolean; connected: boolean; host?: string; device?: string };
+}
+
 export type SSEEvent =
   | { type: 'log'; msg: string }
   | { type: 'done' }

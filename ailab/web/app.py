@@ -69,15 +69,25 @@ _recipes_cache: list | None = None
 _recipes_cache_ts: float = 0.0
 
 
+def _port_reachable(port: int, timeout: float = 2.0) -> bool:
+    """Return True if a TCP port accepts a connection on localhost."""
+    try:
+        with _socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _detect_lemonade_port() -> int | None:
     """Return the first reachable lemonade-server port (13305 or 8000), or None."""
     for port in [13305, 8000]:
-        try:
-            with _socket.create_connection(("127.0.0.1", port), timeout=2):
-                return port
-        except OSError:
-            pass
+        if _port_reachable(port):
+            return port
     return None
+
+
+# Set in lifespan so /api/host-status can report the tunnel's live state.
+_tunnel_manager: "CloudTunnelManager | None" = None
 
 def _web_port() -> int:
     """The port this daemon listens on (set by cmd_web / the snap wrapper)."""
@@ -101,6 +111,7 @@ def _hub_host_from_env() -> str | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _tunnel_manager
     logger.info(
         "Dashboard URL: http://127.0.0.1:%d/#token=%s", _web_port(), API_TOKEN
     )
@@ -114,11 +125,13 @@ async def lifespan(app: FastAPI):
         # Bad cloud settings must not crash-loop the daemon; the local
         # dashboard should keep working with the tunnel disabled.
         logger.error("Cloud tunnel disabled — invalid configuration: %s", exc)
+    _tunnel_manager = tunnel
     if tunnel:
         await tunnel.start()
     yield
     if tunnel:
         await tunnel.stop()
+    _tunnel_manager = None
 
 
 app = FastAPI(title="ailab web interface", lifespan=lifespan)
@@ -684,6 +697,32 @@ async def api_list_packages():
 async def api_list_users():
     """Return host users with UID >= 1000 (candidates for container mapping)."""
     return list_system_users()
+
+
+@app.get("/api/host-status")
+async def api_host_status():
+    """Report host AI-service availability and cloud-tunnel state for the UI."""
+    def _probe():
+        lemonade_port = _detect_lemonade_port()
+        return lemonade_port, _port_reachable(11434)
+
+    lemonade_port, ollama_ok = await asyncio.to_thread(_probe)
+
+    if _tunnel_manager is not None:
+        cloud = {
+            "configured": True,
+            "connected": _tunnel_manager.connected,
+            "host": _tunnel_manager.host,
+            "device": _tunnel_manager.device_id,
+        }
+    else:
+        cloud = {"configured": False, "connected": False}
+
+    return {
+        "lemonade": {"reachable": lemonade_port is not None, "port": lemonade_port},
+        "ollama": {"reachable": ollama_ok},
+        "cloud": cloud,
+    }
 
 
 # ── Lemonade recipes ──────────────────────────────────────────────────────────

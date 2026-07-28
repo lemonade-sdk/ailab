@@ -8,6 +8,8 @@ import { LogStream } from './components/LogStream';
 import { PortManager } from './components/PortManager';
 import { InstallModal } from './components/InstallModal';
 import { ChangeModelModal } from './components/ChangeModelModal';
+import { HostStatus } from './components/HostStatus';
+import { Toaster } from './components/Toaster';
 
 export default function App() {
   const [containers, setContainers] = useState<Container[]>([]);
@@ -61,12 +63,15 @@ export default function App() {
             <span className="text-slate-400 text-xs font-light">A box for your agents</span>
           </div>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
-        >
-          + New Container
-        </button>
+        <div className="flex items-center gap-5">
+          {!authRequired && <div className="hidden md:block"><HostStatus /></div>}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
+          >
+            + New Container
+          </button>
+        </div>
       </header>
 
       <main className="p-6">
@@ -135,6 +140,7 @@ export default function App() {
           }}
         />
       )}
+      <Toaster />
     </div>
   );
 }

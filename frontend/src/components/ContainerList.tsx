@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Container, Package } from '../types';
 import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPackages, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
 import { SSEEvent } from '../types';
+import { pushToast } from '../toast';
 
 interface Props {
   containers: Container[];
@@ -410,13 +411,21 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
   const openclawPort = packages.find((p) => p.name === 'openclaw')?.ports[0] ?? null;
 
   const handleStart = async (name: string) => {
-    try { await startContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try { await startContainer(name); onRefresh(); }
+    catch (e) { pushToast(`Could not start "${name}": ${String(e)}`); }
   };
   const handleStop = async (name: string) => {
-    try { await stopContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try { await stopContainer(name); onRefresh(); }
+    catch (e) { pushToast(`Could not stop "${name}": ${String(e)}`); }
   };
   const handleDelete = async (name: string) => {
-    try { await deleteContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try {
+      await deleteContainer(name);
+      pushToast(`Deleted "${name}".`, 'success');
+      onRefresh();
+    } catch (e) {
+      pushToast(`Could not delete "${name}": ${String(e)}`);
+    }
     setConfirmDelete(null);
   };
 

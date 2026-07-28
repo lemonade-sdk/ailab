@@ -136,9 +136,22 @@ Privileged is required for classic snaps. Instead: honest threat-model docs.
   reading newer-LXD profiles/projects (pre-existing, not Phase 3). Consider
   suppressing in Phase 5.
 
-### Phase 4 — Web UX
-Host-status strip (lemonade/ollama/tunnel state), login/token flow, fixed
-port-direction display, concurrent-safe progress logs, error toasts.
+### Phase 4 — Web UX  ✅ DONE (2026-07-28, unreleased)
+Port-direction display + concurrent-safe progress logs were already fixed in
+Phase 1, and the token login flow / locked screen in Phase 0. Remaining work:
+- New `GET /api/host-status`: lemonade (reachable + port), ollama, and cloud
+  tunnel state (configured/connected/host/device). `CloudTunnelManager` gained
+  `connected`/`host`/`device_id` properties; the manager is stashed in an
+  app-module global from lifespan so the endpoint can read live state.
+- `HostStatus` header strip (frontend) polls every 10s and shows a dot per
+  service; the cloud dot only appears when a tunnel is configured. Hidden on
+  the locked screen and narrow viewports.
+- Toast system: `frontend/src/toast.ts` (pub/sub store, no context) +
+  `Toaster` component. Replaced the disruptive `alert()` calls in
+  ContainerList (start/stop/delete) with toasts; delete shows a success toast.
+  Modal-inline errors (Create/Install/Port/ChangeModel) were already good UX
+  and left as-is. Periodic list refresh stays console.error to avoid a toast
+  storm when the daemon is briefly unreachable.
 
 ### Phase 5 — Packaging, CI, docs
 Snap icon + store metadata; snapcraft build + install smoke test in CI; unit

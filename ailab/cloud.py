@@ -166,6 +166,19 @@ class CloudTunnelManager:
         self._local_session: aiohttp.ClientSession | None = None
         self._tunnel_ws: aiohttp.ClientWebSocketResponse | None = None
 
+    @property
+    def connected(self) -> bool:
+        """True while the tunnel WebSocket to the hub is open."""
+        return self._tunnel_ws is not None and not self._tunnel_ws.closed
+
+    @property
+    def host(self) -> str:
+        return self._config.host
+
+    @property
+    def device_id(self) -> str:
+        return self._config.device_id
+
     async def _await_registered(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         msg = await ws.receive(timeout=_REGISTER_TIMEOUT)
 

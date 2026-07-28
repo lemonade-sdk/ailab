@@ -1,4 +1,4 @@
-import { Container, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
+import { Container, HostStatus, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
 
 // Use Vite's BASE_URL so API calls resolve correctly whether the app is served
 // from the root (local: '/') or from a tunnel sub-path (e.g. '/d/device:11500/').
@@ -138,6 +138,10 @@ export async function getUsers(): Promise<SystemUser[]> {
 
 export async function getPackages(): Promise<Package[]> {
   return request<Package[]>('/packages');
+}
+
+export async function getHostStatus(): Promise<HostStatus> {
+  return request<HostStatus>('/host-status');
 }
 
 export async function streamSSE(
