@@ -13,11 +13,21 @@ import termios
 import textwrap
 import time
 import tty
+import warnings
 from pathlib import Path
 
 import aiohttp
 import pylxd
 import pylxd.exceptions
+
+# pylxd 2.4.x warns whenever a newer LXD returns a model field it doesn't
+# know about (e.g. Profile.project, Project.replica_mode). It's harmless but
+# spams every command that reads a profile/project; silence just that message.
+warnings.filterwarnings(
+    "ignore",
+    message=r"Attempted to set unknown attribute.*",
+    category=UserWarning,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 

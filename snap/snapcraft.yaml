@@ -2,6 +2,7 @@ name: ailab
 adopt-info: ailab
 base: core24
 title: AI Lab
+icon: snap/gui/ailab.svg
 summary: LXD-based sandboxes for running AI tools safely on Ubuntu
 description: |
   AI Lab creates lightweight LXD containers pre-wired to use AI services

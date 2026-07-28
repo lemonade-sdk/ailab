@@ -153,7 +153,24 @@ Phase 1, and the token login flow / locked screen in Phase 0. Remaining work:
   and left as-is. Periodic list refresh stays console.error to avoid a toast
   storm when the daemon is briefly unreachable.
 
-### Phase 5 — Packaging, CI, docs
-Snap icon + store metadata; snapcraft build + install smoke test in CI; unit
-tests; LXD integration job; rewrite README/QUICKSTART to match reality
-(isolated home, actual defaults, threat-model section).
+### Phase 5 — Packaging, CI, docs  ✅ DONE (2026-07-28, unreleased)
+- Unit tests under `tests/` (50): appstore parsing, port partitioning +
+  sort key, CloudConfig normalize/from_env, auth (origin allowlist, token
+  file perms, middleware 401/pass-through incl. foreign-origin reject),
+  doctor formatting/classification, CLI parser. `[tool.pytest.ini_options]`
+  + `[project.optional-dependencies] test` in pyproject.
+- CI: new `unit` job (pytest) and `snap` job (snapcraft build via
+  snapcore/action-build, `snap install --dangerous`, smoke `ailab --version
+  / --help / packages`, upload artifact). Snap job needs fetch-depth: 0 for
+  `git describe --tags`.
+- Snap icon: `snap/gui/ailab.svg` (lemon on dark rounded square), referenced
+  via `icon:` in snapcraft.yaml.
+- Docs: new "Security model" section in README (what it protects vs. not —
+  privileged containers are NOT a hard boundary; isolated home; token auth;
+  widened-bind and supply-chain caveats); `ailab doctor` added to setup steps.
+- Quieted pylxd 2.4.x "unknown attribute" UserWarnings via a targeted
+  `warnings.filterwarnings` in container.py.
+- Not done (deferred, lower value): a full LXD end-to-end integration job in
+  CI (the snap smoke job covers build+install+CLI; container-lifecycle
+  integration would need an LXD-enabled runner and is better as a manual/
+  nightly job).

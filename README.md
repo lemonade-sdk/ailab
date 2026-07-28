@@ -40,6 +40,16 @@ sudo snap install ailab
 sudo snap connect ailab:lxd lxd:lxd
 ```
 
+Confirm everything is wired up correctly:
+
+```bash
+ailab doctor
+```
+
+It checks that LXD is installed, initialised, and reachable, and reports
+whether lemonade-server and ollama are available — with a remedy for anything
+that's missing.
+
 The web management interface runs as a daemon automatically after install.
 Configure the host and port with snap settings:
 
@@ -311,6 +321,54 @@ work inside the container — classic-confinement snaps rely on bind-mount
 tricks that only a privileged container can perform. Containers created
 before this was added need to be recreated (`ailab delete` + `ailab new`)
 before packages can be installed.
+
+## Security model
+
+AI Lab's goal is to keep AI tools — and whatever they install or download —
+off your host system and out of your real home directory. It is **not** a
+hard security sandbox for running actively malicious code. Understand these
+boundaries before pointing an autonomous agent at anything sensitive.
+
+**What AI Lab protects**
+
+- **Your host packages and system.** Tools install *inside* the container
+  (snaps, npm, pip, brew), never on your host.
+- **Your real home directory.** Each container only sees its own isolated
+  home (`~/ailab/<name>` on the host), not the rest of `~`. A tool that
+  `rm -rf`s its home only affects that one container's directory.
+- **Other containers.** Each has its own home and config, and all live in a
+  dedicated `ailab` LXD project separate from your other LXD instances.
+- **The management API.** Every `/api` route, including the interactive shell
+  and log WebSockets, requires the bearer token from `ailab dashboard`. The
+  web daemon binds `127.0.0.1` by default, and cross-origin browser pages are
+  rejected even if they somehow obtain the token.
+
+**What AI Lab does *not* protect against**
+
+- **Container escape.** ailab containers run **privileged**
+  (`security.privileged=true`), which is *required* for classic-confinement
+  snaps like openclaw to install. Privileged container root is effectively
+  host root: a determined attacker who gains root inside the container may be
+  able to escape to the host. Treat the container as a convenience/tidiness
+  boundary, not a VM-grade trust boundary. Do not run code you actively
+  distrust and expect the host to be safe.
+- **Your files, if you widen the mount.** Only `~/ailab/<name>` is exposed by
+  default; anything you additionally bind-mount or forward is on you.
+- **Anyone who can reach a widened bind.** `ailab web --host 0.0.0.0` (or
+  `snap set ailab web.host=0.0.0.0`) exposes the token-protected API to the
+  network — only do this on a trusted network.
+- **Supply chain.** Container provisioning and package onboarding fetch and
+  run scripts from the network (Node.js, bun, Homebrew, the nimbus-app-store
+  catalog). These run inside the container, but they are not pinned or
+  checksum-verified.
+
+**Access notes**
+
+- The web daemon runs as **root** under the snap (it needs the LXD socket) and
+  stores its token `0600` under the snap's data directory; use
+  `sudo ailab dashboard` to read it.
+- Non-snap installs need your user in the `lxd` group; that group grants full
+  control of LXD, which is itself root-equivalent. `ailab doctor` checks this.
 
 ## Outbound Ports
 
