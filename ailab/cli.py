@@ -226,10 +226,22 @@ def cmd_port(args):
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
+class AilabArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser with a friendlier message for unknown subcommands."""
+
+    def error(self, message):
+        if message.startswith("argument COMMAND: invalid choice:"):
+            bad = message.split("'")[1]
+            self.print_usage(sys.stderr)
+            sys.stderr.write(f"ailab: '{bad}' is not an ailab command. See 'ailab help'.\n")
+            sys.exit(2)
+        super().error(message)
+
+
 def build_parser():
     available_pkgs = ", ".join(sorted(INSTALLERS))
 
-    parser = argparse.ArgumentParser(
+    parser = AilabArgumentParser(
         prog="ailab",
         description=(
             "Manage LXD-based AI development sandboxes.\n\n"
@@ -384,7 +396,11 @@ examples:
     )
     p_pkgs.set_defaults(func=cmd_packages)
 
-    p_complete = sub.add_parser("_complete", help=argparse.SUPPRESS)
+    # ── help ───────────────────────────────────────────────────────────────────
+    p_help = sub.add_parser("help", help="Show this help message")
+    p_help.set_defaults(func=lambda args: parser.print_help())
+
+    p_complete = sub.add_parser("_complete")
     p_complete.add_argument("kind", choices=["commands", "containers", "packages", "port-actions"])
     p_complete.set_defaults(func=cmd_complete)
 
