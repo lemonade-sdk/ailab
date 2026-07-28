@@ -254,6 +254,22 @@ ailab port list mybox
 ailab port remove mybox 9000
 ```
 
+By default, outbound proxies (host → container, the kind used for web UIs)
+listen on `127.0.0.1` only. To reach a container's web UI from another
+machine — e.g. picoclaw's UI from your host's public IP — bind it wider:
+
+```bash
+# Reachable from any interface on the host
+ailab port add mybox 18800 --bind 0.0.0.0
+
+# Reachable only from a specific address (e.g. the host's public IP)
+ailab port add mybox 18800 --bind 203.0.113.10
+```
+
+Only do this on a network you trust — it makes the container's service
+reachable to anyone who can reach that address, with none of the
+token-based auth the web dashboard has.
+
 ## Installable Packages
 
 Packages install as classic-confinement snaps from the

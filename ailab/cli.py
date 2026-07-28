@@ -225,8 +225,11 @@ def cmd_port(args):
         except ValueError:
             print("Port numbers must be integers.")
             sys.exit(1)
+        if args.bind and args.inbound:
+            print("Error: --bind only applies to outbound proxies (host → container).")
+            sys.exit(1)
         direction = "inbound" if args.inbound else "outbound"
-        add_port(args.name, host_port, container_port, direction)
+        add_port(args.name, host_port, container_port, direction, bind_host=args.bind or "127.0.0.1")
 
     elif args.port_command == "remove":
         try:
@@ -477,6 +480,16 @@ examples:
         "--inbound",
         action="store_true",
         help="Proxy container→host instead of host→container",
+    )
+    p_port_add.add_argument(
+        "--bind",
+        metavar="ADDRESS",
+        help=(
+            "Host address the outbound proxy listens on (default: 127.0.0.1, "
+            "loopback only). Use 0.0.0.0 or a specific public IP to make the "
+            "container's service reachable from other machines — only do this "
+            "on a trusted network. Outbound proxies only."
+        ),
     )
     p_port_add.set_defaults(func=cmd_port, port_command="add")
 

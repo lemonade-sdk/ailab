@@ -1181,11 +1181,21 @@ def create_container(
 
 # ── Port management ───────────────────────────────────────────────────────────
 
-def add_port(name: str, host_port: int, container_port: int, direction: str = "outbound"):
+def add_port(
+    name: str,
+    host_port: int,
+    container_port: int,
+    direction: str = "outbound",
+    bind_host: str = "127.0.0.1",
+):
     """Add a port proxy to a container.
 
     direction: 'outbound' (host → container, for web UIs)
                'inbound'  (container → host, for host services)
+    bind_host: host-side address the outbound proxy listens on. Defaults to
+               127.0.0.1 (loopback only); pass '0.0.0.0' or a specific
+               address to make the container's service reachable from
+               other machines. Ignored for inbound proxies.
     """
     cname = _container_name(name)
     if _container_status(cname) == "missing":
@@ -1195,13 +1205,16 @@ def add_port(name: str, host_port: int, container_port: int, direction: str = "o
     if direction == "outbound":
         dev_name = f"proxy-out-custom-{host_port}"
         ok = add_proxy_device(cname, dev_name,
-                               f"tcp:127.0.0.1:{host_port}",
+                               f"tcp:{bind_host}:{host_port}",
                                f"tcp:127.0.0.1:{container_port}",
                                bind="host")
         if not ok:
             print(f"Error: port {host_port} is already in use on the host.")
             sys.exit(1)
-        print(f"Added outbound proxy: host:{host_port} → container:{container_port}")
+        print(f"Added outbound proxy: {bind_host}:{host_port} → container:{container_port}")
+        if bind_host not in ("127.0.0.1", "localhost", "::1"):
+            print(f"Warning: listening on {bind_host} exposes this service to "
+                  "anyone who can reach that address — only do this on a trusted network.")
     else:
         dev_name = f"proxy-in-custom-{container_port}"
         add_proxy_device(cname, dev_name,
