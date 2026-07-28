@@ -8,12 +8,15 @@ from .container import (
     add_port,
     create_container,
     delete_container,
+    info_container,
     list_containers,
     list_ports,
     remove_port,
     run_container,
     stop_container,
+    tail_logs,
 )
+from .doctor import DoctorError
 from .installers import INSTALLERS, get_installer
 
 
@@ -83,12 +86,50 @@ def cmd_install(args):
     installer.install(args.name)
 
 
+def cmd_info(args):
+    info_container(args.name)
+
+
+def cmd_logs(args):
+    tail_logs(args.name, follow=args.follow, lines=args.lines)
+
+
+def cmd_doctor(args):
+    from . import doctor
+
+    checks = doctor.run_checks()
+    print("AI Lab environment check:\n")
+    print(doctor.format_checks(checks))
+    print()
+    if any(c.status == doctor.FAIL for c in checks):
+        print("Some required checks failed — see the remedies above.")
+        sys.exit(1)
+    if any(c.status == doctor.WARN for c in checks):
+        print("Required checks passed. Some optional services are unavailable (see above).")
+    else:
+        print("Everything looks good.")
+
+
 def cmd_packages(args):
-    print(f"{'PACKAGE':<20} DESCRIPTION")
-    print("-" * 70)
+    from . import appstore
+
+    catalog = appstore.get_catalog()
+    snaps = appstore.get_snaps(catalog)
+
+    print(f"{'PACKAGE':<16} {'PORTS':<16} DESCRIPTION")
+    print("-" * 78)
+    if snaps:
+        for snap in sorted(snaps, key=lambda s: s["name"]):
+            ports = ",".join(str(p) for p in appstore.get_ports(snap)) or "-"
+            desc = snap.get("summary") or snap.get("title") or ""
+            print(f"{snap['name']:<16} {ports:<16} {desc}")
+        return
+
+    # Catalog unreachable — fall back to the built-in table.
     for name, cls in sorted(INSTALLERS.items()):
-        inst = cls()
-        print(f"{name:<20} {inst.description}")
+        print(f"{name:<16} {'-':<16} {cls().description}")
+    print()
+    print("(could not reach the app catalog; showing the built-in list)")
 
 
 def cmd_web(args):
@@ -141,7 +182,8 @@ def cmd_complete(args):
 
     if args.kind == "commands":
         for name in ("new", "run", "stop", "list", "ls", "delete", "rm",
-                     "install", "packages", "pkgs", "port", "web", "dashboard"):
+                     "install", "packages", "pkgs", "port", "web", "dashboard",
+                     "doctor", "info", "logs"):
             print(name)
         return
 
@@ -197,9 +239,12 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
+  ailab doctor                 Check your environment is ready
   ailab new mybox              Create a new sandbox named 'mybox'
   ailab install mybox openclaw Install openclaw (local-AI configured)
   ailab run mybox              Open a shell in 'mybox'
+  ailab info mybox             Show status, ports, and installed tools
+  ailab logs mybox -f          Follow the container's logs
   ailab stop mybox             Stop a running sandbox
   ailab list                   List all sandboxes
   ailab delete mybox           Delete a sandbox
@@ -258,6 +303,44 @@ examples:
     # ── list ───────────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List all sandboxes", aliases=["ls"])
     p_list.set_defaults(func=cmd_list)
+
+    # ── info ───────────────────────────────────────────────────────────────────
+    p_info = sub.add_parser(
+        "info",
+        help="Show details about a sandbox",
+        description=(
+            "Show a sandbox's status, IP address, mapped user, config dir,\n"
+            "forwarded ports, and installed packages (when running)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_info.add_argument("name", help="Sandbox name")
+    p_info.set_defaults(func=cmd_info)
+
+    # ── logs ───────────────────────────────────────────────────────────────────
+    p_logs = sub.add_parser("logs", help="Show a sandbox's system logs")
+    p_logs.add_argument("name", help="Sandbox name")
+    p_logs.add_argument(
+        "--follow", "-f", action="store_true",
+        help="Follow the log output (Ctrl-C to stop)",
+    )
+    p_logs.add_argument(
+        "--lines", "-n", type=int, default=50,
+        help="Number of lines to show (default: 50)",
+    )
+    p_logs.set_defaults(func=cmd_logs)
+
+    # ── doctor ─────────────────────────────────────────────────────────────────
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Check that your environment is set up correctly",
+        description=(
+            "Check LXD is installed, initialised, and reachable, and report\n"
+            "whether host AI services (lemonade-server, ollama) are available."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_doctor.set_defaults(func=cmd_doctor)
 
     # ── delete ─────────────────────────────────────────────────────────────────
     p_del = sub.add_parser("delete", help="Delete a sandbox", aliases=["rm"])
@@ -382,7 +465,11 @@ examples:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except DoctorError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

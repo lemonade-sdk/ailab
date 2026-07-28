@@ -113,10 +113,28 @@ All bugs in the table above. Notes:
 ### ~~Phase 2 — Unprivileged containers~~  SKIPPED
 Privileged is required for classic snaps. Instead: honest threat-model docs.
 
-### Phase 3 — CLI intuitiveness
-`ailab doctor`, friendly pre-flight errors on `new`, `ailab info`,
-`ailab logs`, live-catalog `ailab packages`, print dashboard URL after
-install, fix man page + completions.
+### Phase 3 — CLI intuitiveness  ✅ DONE (2026-07-28, unreleased)
+- New `ailab/doctor.py`: `run_checks()` (full report) + `preflight()`
+  (LXD-critical subset, raises `DoctorError`). Checks LXD socket, API
+  connectivity (classifies permission errors → snap interface vs lxd
+  group), storage/network init, ailab project, lemonade + ollama.
+- `create_container` calls `preflight()` (lazy import to avoid a cycle);
+  `main()` catches `DoctorError` → clean stderr message, exit 1. Web path
+  surfaces it via the SSE error event.
+- `ailab info <name>`: status, IP, mapped user, config dir, in/out ports,
+  installed catalog apps (via `snap list` when running), openclaw
+  tokenized dashboard URL.
+- `ailab logs <name> [-f] [-n N]`: journalctl tail/follow via container_exec
+  stream; friendly error when stopped/missing.
+- `ailab packages`: live nimbus-app-store catalog with ports; falls back to
+  the built-in table when the catalog is unreachable.
+- Post-install: `CatalogAppInstaller.post_install_hints()` hook; openclaw
+  prints its `#token=` dashboard URL after install (CLI + web SSE log).
+- Man page (debian/ailab.1) + bash completion updated for doctor/info/logs/
+  web/dashboard; fixed stale full-home-share and config-dir claims.
+- Note: pylxd 2.4.1 emits harmless "unknown attribute" UserWarnings when
+  reading newer-LXD profiles/projects (pre-existing, not Phase 3). Consider
+  suppressing in Phase 5.
 
 ### Phase 4 — Web UX
 Host-status strip (lemonade/ollama/tunnel state), login/token flow, fixed

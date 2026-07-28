@@ -3,7 +3,8 @@
 import json
 
 from .catalog_app import CatalogAppInstaller
-from ..container import pull_file
+from .. import appstore
+from ..container import get_container_user, pull_file
 
 # WebSocket path served by the openclaw gateway (used to construct tunnel
 # URLs). Not part of the nimbus-app-store catalog schema — it's a protocol
@@ -34,3 +35,15 @@ class OpenclawInstaller(CatalogAppInstaller):
         except json.JSONDecodeError:
             return None
         return data.get("gateway", {}).get("auth", {}).get("token")
+
+    def post_install_hints(self, cname: str) -> list[str]:
+        """Print the openclaw dashboard URL including its gateway token."""
+        _, _, _, home = get_container_user(cname)
+        token = self._read_gateway_token(cname, home)
+        if not token:
+            return []
+        snap = appstore.get_snap(appstore.get_catalog(), self.app_id)
+        ports = appstore.get_ports(snap) if snap else []
+        if not ports:
+            return []
+        return [f"  Dashboard: http://localhost:{ports[0]}/#token={token}"]

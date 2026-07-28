@@ -976,6 +976,12 @@ def create_container(
     username: the host user to map into the container; defaults to the
               current user.  Useful when the server runs as root (e.g. snap).
     """
+    # Surface setup problems (LXD missing/uninitialised, interface not
+    # connected, user not in the lxd group) as a friendly message before we
+    # start touching the LXD API.  Imported lazily to avoid a circular import.
+    from .doctor import preflight
+    preflight()
+
     cname = _container_name(name)
     if username:
         username, uid, gid, home = _user_info(username)
@@ -1346,6 +1352,115 @@ def list_containers():
         ]
         ports_str = ",".join(sorted(ports, key=int)) if ports else "-"
         print(f"{cname:<25} {status:<12} {ipv4:<18} {ports_str}")
+
+
+def _port_sort_key(p: str):
+    """Sort proxy ports numerically, keeping any non-numeric ones last."""
+    try:
+        return (0, int(p))
+    except ValueError:
+        return (1, p)
+
+
+def _instance_ipv4(instance) -> str:
+    """Return the first non-loopback IPv4 for a running instance, or ''."""
+    try:
+        for iface in (instance.state().network or {}).values():
+            for addr in iface.get("addresses", []):
+                if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                    return addr["address"]
+    except Exception:
+        pass
+    return ""
+
+
+def _installed_catalog_apps(cname: str) -> list[str]:
+    """Return catalog app ids whose snap is installed in a running container."""
+    from . import appstore
+    catalog = appstore.get_catalog()
+    by_store_name = {
+        appstore.get_store_name(s): s["name"] for s in appstore.get_snaps(catalog)
+    }
+    rc, out, _ = container_exec(cname, ["snap", "list"], check=False)
+    if rc != 0:
+        return []
+    installed = []
+    for line in out.splitlines()[1:]:  # skip the header row
+        fields = line.split()
+        if fields and fields[0] in by_store_name:
+            installed.append(by_store_name[fields[0]])
+    return sorted(installed)
+
+
+def info_container(name: str):
+    """Print detailed information about a single container."""
+    cname = _container_name(name)
+    try:
+        instance = _get_instance(cname)
+    except RuntimeError:
+        print(f"Container '{name}' not found.")
+        sys.exit(1)
+
+    username, uid, gid, home = get_container_user(cname)
+    status = instance.status
+    ipv4 = _instance_ipv4(instance) if status.lower() == "running" else ""
+
+    outbound, inbound = [], []
+    for cfg in (instance.expanded_devices or {}).values():
+        if cfg.get("type") != "proxy":
+            continue
+        listen = cfg.get("listen", "")
+        port = listen.rsplit(":", 1)[-1] if ":" in listen else listen
+        if cfg.get("bind", "host") == "host":
+            outbound.append(port)
+        else:
+            inbound.append(port)
+
+    print(f"Container: {name}")
+    print(f"  Status:      {status}")
+    print(f"  IPv4:        {ipv4 or '-'}")
+    print(f"  Mapped user: {username} (uid {uid})")
+    print(f"  Config dir:  {container_config_dir(name, home)}")
+    if outbound:
+        print(f"  Outbound (host → container): {', '.join(sorted(outbound, key=_port_sort_key))}")
+    if inbound:
+        print(f"  Inbound  (container → host): {', '.join(sorted(inbound, key=_port_sort_key))}")
+
+    if status.lower() != "running":
+        print("  Packages:    (start with 'ailab run' to list installed packages)")
+        return
+
+    installed = _installed_catalog_apps(cname)
+    print(f"  Packages:    {', '.join(installed) if installed else '(none installed)'}")
+
+    if "openclaw" in installed:
+        from . import appstore
+        from .installers.openclaw import OpenclawInstaller
+        token = OpenclawInstaller()._read_gateway_token(cname, home)
+        snap = appstore.get_snap(appstore.get_catalog(), "openclaw")
+        ports = appstore.get_ports(snap) if snap else []
+        if token and ports:
+            print(f"  openclaw:    http://localhost:{ports[0]}/#token={token}")
+
+
+def tail_logs(name: str, follow: bool = False, lines: int = 50):
+    """Tail the container's systemd journal (optionally following)."""
+    cname = _container_name(name)
+    status = _container_status(cname)
+    if status == "missing":
+        print(f"Container '{name}' not found.")
+        sys.exit(1)
+    if status != "running":
+        print(f"Container '{name}' is not running (status: {status}). Start it with: ailab run {name}")
+        sys.exit(1)
+
+    cmd = ["journalctl", "--no-pager", "-n", str(lines)]
+    if follow:
+        cmd.append("-f")
+    try:
+        container_exec(cname, cmd, stream=True, check=False)
+    except KeyboardInterrupt:
+        pass
 
 
 def completion_container_names() -> list[str]:

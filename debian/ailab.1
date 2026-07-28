@@ -7,10 +7,16 @@ ailab \- manage LXD-based sandboxes for running AI tools safely on Ubuntu
 .SH DESCRIPTION
 .B ailab
 creates lightweight LXD containers pre-wired to use AI services running
-on the host (lemonade-server, ollama). Each container shares the user's
-home directory while keeping installed software isolated. All containers
-live in a dedicated LXD project named \fBailab\fR.
+on the host (lemonade-server, ollama). Each container gets its own isolated
+home directory, keeping installed software and the files an agent touches
+separate from the rest of the system. All containers live in a dedicated
+LXD project named \fBailab\fR.
 .SH COMMANDS
+.TP
+.B doctor
+Check that the environment is ready: LXD installed, initialised, and
+reachable, and whether host AI services (lemonade-server, ollama) are
+available. Reports a remedy for each problem found.
 .TP
 .B new \fINAME\fR [\-\-install \fIPACKAGE\fR] [\-\-port \fIHOST:CONTAINER\fR]
 Create a new sandbox container. Optionally install one or more packages
@@ -19,6 +25,15 @@ automatically, then an interactive shell is opened.
 .TP
 .B run \fINAME\fR
 Start the container (if stopped) and open an interactive login shell.
+Alias: \fBshell\fR
+.TP
+.B info \fINAME\fR
+Show a container's status, IP address, mapped user, config directory,
+forwarded ports, and installed packages (when running).
+.TP
+.B logs \fINAME\fR [\-\-follow] [\-\-lines \fIN\fR]
+Show the container's system journal. With \fB\-\-follow\fR (\fB\-f\fR),
+stream new log lines until interrupted.
 .TP
 .B stop \fINAME\fR
 Stop a running container.
@@ -37,8 +52,15 @@ Install a pre-configured AI tool into an existing container. Tools are
 configured for local-first AI with cloud providers disabled.
 .TP
 .B packages
-List available installable packages.
+List available installable packages from the app catalog.
 Alias: \fBpkgs\fR
+.TP
+.B web \fR[\-\-host \fIHOST\fR] [\-\-port \fIPORT\fR]
+Start the web management interface (binds 127.0.0.1:11500 by default).
+.TP
+.B dashboard
+Print the web dashboard URL including its access token. Under the snap the
+token file is root-owned: use \fBsudo ailab dashboard\fR.
 .TP
 .B port add \fINAME PORT\fR [\fICONTAINER_PORT\fR] [\-\-inbound]
 Add a port proxy to a container. Default: outbound (host browser to
@@ -50,6 +72,9 @@ Remove a custom port proxy.
 .B port list \fINAME\fR
 List all port proxies on a container.
 .SH EXAMPLES
+.TP
+Check the environment before creating a sandbox:
+.B ailab doctor
 .TP
 Create a sandbox with openclaw, run onboarding, drop to shell:
 .B ailab new mybox \-\-install openclaw
@@ -70,9 +95,13 @@ Expose a port from the container to the host:
 .B ailab port add mybox 9000
 .SH FILES
 .TP
-.I ~/.local/share/ailab/containers/NAME/
-Per-container configuration directory. Accessible inside the container
-at the same path via the bind-mounted home directory.
+.I ~/ailab/NAME/
+Isolated per-container home directory (non-snap installs), bind-mounted as
+the user's home path inside the container.
+.TP
+.I ~/.local/share/ailab/web-token
+Web API access token (non-snap installs; under the snap it lives in the
+snap's data directory). Printed by \fBailab dashboard\fR.
 .SH SEE ALSO
 .BR lxc (1)
 .SH AUTHOR

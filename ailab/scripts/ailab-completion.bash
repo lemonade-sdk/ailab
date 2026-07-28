@@ -33,7 +33,7 @@ _ailab_complete() {
     fi
 
     local command="${words[1]:-}"
-    local commands="new run stop list ls delete rm install packages pkgs port"
+    local commands="new run stop list ls delete rm install packages pkgs port web dashboard doctor info logs"
     local common_flags="--help --version"
 
     if [ "$cword" -eq 1 ]; then
@@ -51,8 +51,15 @@ _ailab_complete() {
             esac
             _ailab_compgen_lines "$cur" "--install -i --port -p --help"
             ;;
-        run|stop|delete|rm)
+        run|shell|stop|delete|rm|info)
             _ailab_compgen_lines "$cur" "$(_ailab_containers)"
+            ;;
+        logs)
+            if [ "$cword" -eq 2 ]; then
+                _ailab_compgen_lines "$cur" "$(_ailab_containers)"
+            else
+                _ailab_compgen_lines "$cur" "--follow -f --lines -n --help"
+            fi
             ;;
         install)
             if [ "$cword" -eq 2 ]; then
@@ -61,8 +68,14 @@ _ailab_complete() {
                 _ailab_compgen_lines "$cur" "$(_ailab_packages)"
             fi
             ;;
-        packages|pkgs|list|ls)
+        packages|pkgs|list|ls|doctor)
             COMPREPLY=()
+            ;;
+        web)
+            _ailab_compgen_lines "$cur" "--host --port -p --reload --help"
+            ;;
+        dashboard)
+            _ailab_compgen_lines "$cur" "--port -p --help"
             ;;
         port)
             if [ "$cword" -eq 2 ]; then

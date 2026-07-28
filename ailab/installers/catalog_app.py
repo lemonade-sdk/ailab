@@ -101,6 +101,16 @@ class CatalogAppInstaller:
         print(f"  Start:  ailab run {container_name}")
         for port in ports:
             print(f"  Web UI: http://localhost:{port}")
+        for hint in self.post_install_hints(cname):
+            print(hint)
+
+    def post_install_hints(self, cname: str) -> list[str]:
+        """Extra "how to reach it" lines printed after install.
+
+        Overridden by apps (e.g. openclaw) that can produce a ready-to-open
+        URL — including any access token — once their config is written.
+        """
+        return []
 
     def run_post_install(self, container_name: str):
         """Re-fetch the catalog and re-run this app's post-install script.
