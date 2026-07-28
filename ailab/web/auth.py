@@ -67,13 +67,19 @@ def get_or_create_token() -> str:
     return token
 
 
-def _origin_allowed(origin: str, hub_host: str | None) -> bool:
+def _origin_allowed(origin: str, hub_host: str | None, request_host: str | None = None) -> bool:
     """Return True if a browser Origin header is acceptable.
 
     Loopback origins (the dashboard served locally) are always fine; the
     configured cloud-tunnel hub — or any of its device subdomains, e.g.
-    https://mydevice.cloud.example.com — is fine; anything else is a
-    cross-site request and gets rejected.
+    https://mydevice.cloud.example.com — is fine. So is any origin whose
+    host:port exactly matches the Host header the browser used to reach
+    this server (request_host) — that's a same-origin request regardless
+    of whether the dashboard is bound to loopback, a LAN address, or a
+    public IP (`ailab web --host 0.0.0.0`); a cross-site page can't forge
+    the browser's Origin header to match, so this widens reachability
+    without weakening the check. Anything else is a cross-site request
+    and gets rejected.
     """
     try:
         parsed = urlsplit(origin)
@@ -83,7 +89,10 @@ def _origin_allowed(origin: str, hub_host: str | None) -> bool:
     if host in _LOOPBACK_HOSTS:
         return True
     if hub_host and parsed.scheme in ("http", "https"):
-        return host == hub_host or host.endswith("." + hub_host)
+        if host == hub_host or host.endswith("." + hub_host):
+            return True
+    if request_host and parsed.netloc.lower() == request_host.lower():
+        return True
     return False
 
 
@@ -123,6 +132,13 @@ class TokenAuthMiddleware:
                 return value.decode("latin-1")
         return None
 
+    @staticmethod
+    def _host_header(scope) -> str | None:
+        for name, value in scope.get("headers", []):
+            if name == b"host":
+                return value.decode("latin-1")
+        return None
+
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket") or not scope["path"].startswith("/api/"):
             await self.app(scope, receive, send)
@@ -132,7 +148,8 @@ class TokenAuthMiddleware:
         # so enforce the Origin allowlist ourselves. Absent Origin means a
         # non-browser client, which the token requirement already covers.
         origin = self._origin_header(scope)
-        origin_ok = origin is None or _origin_allowed(origin, self._hub_host)
+        request_host = self._host_header(scope)
+        origin_ok = origin is None or _origin_allowed(origin, self._hub_host, request_host)
 
         if self._authorized(scope) and origin_ok:
             await self.app(scope, receive, send)

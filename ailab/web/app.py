@@ -502,12 +502,16 @@ def _port_base_url(request: Request) -> str:
     When the request came through the cloud tunnel the proxy injects
     'X-Ailab-Tunnel-Base' (e.g. 'https://hub.example.com/d/mydevice').
     Appending ':{port}' produces the correct tunnel URL for that port.
-    When accessed locally the header is absent and we fall back to
-    'http://localhost' so existing behaviour is unchanged.
+    When accessed directly (no tunnel) the header is absent and we use the
+    Host the browser actually connected to — 127.0.0.1 for a local
+    dashboard, but a LAN or public address if the daemon was started with
+    `ailab web --host 0.0.0.0` and is being reached from elsewhere.
     """
+    direct_base = f"http://{request.url.hostname or 'localhost'}"
+
     tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
     if not tunnel_base:
-        return "http://localhost"
+        return direct_base
 
     client_host = request.client.host if request.client else "unknown"
     try:
@@ -517,12 +521,12 @@ def _port_base_url(request: Request) -> str:
 
     if not trusted_client:
         logger.warning("Ignoring untrusted X-Ailab-Tunnel-Base header from %s", client_host)
-        return "http://localhost"
+        return direct_base
 
     parsed = _urllib_parse.urlparse(tunnel_base)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         logger.warning("Ignoring invalid X-Ailab-Tunnel-Base header: %r", tunnel_base)
-        return "http://localhost"
+        return direct_base
 
     return parsed._replace(params="", query="", fragment="").geturl().rstrip("/")
 

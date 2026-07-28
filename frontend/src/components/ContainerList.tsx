@@ -112,13 +112,19 @@ function GatewayButton({ name, port, label, openclawPort }: { name: string; port
   const [showPairModal, setShowPairModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Last-resort fallback if /api/port-base-url itself can't be reached: use
+  // the address this page was actually loaded from (works for a local
+  // dashboard, a LAN/public IP, or a tunnel host alike) rather than a
+  // hardcoded 'localhost' that would be wrong for anyone but a local user.
+  const localFallback = `${window.location.protocol}//${window.location.hostname}:${port}`;
+
   const fetchUrl = () => {
     setLoading(true);
     if (port !== openclawPort) {
       // Non-token ports: ask the server for the base URL so tunnel routing works.
       getPortBaseUrl()
         .then((base) => setUrl(`${base}:${port}`))
-        .catch(() => setUrl(`http://localhost:${port}`))
+        .catch(() => setUrl(localFallback))
         .finally(() => setLoading(false));
       return;
     }
@@ -130,7 +136,7 @@ function GatewayButton({ name, port, label, openclawPort }: { name: string; port
         } else {
           getPortBaseUrl()
             .then((base) => setUrl(`${base}:${port}`))
-            .catch(() => setUrl(`http://localhost:${port}`));
+            .catch(() => setUrl(localFallback));
         }
       })
       .finally(() => setLoading(false));
