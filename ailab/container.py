@@ -1,6 +1,7 @@
 """LXD container management for ailab — via LXD REST API (pylxd)."""
 
 import asyncio
+import json
 import os
 import pwd
 import shutil
@@ -311,18 +312,46 @@ def container_config_dir(name: str, home: str) -> Path:
     return _container_home_dir(home, name)
 
 
+def _ensure_writable_user_dir(path: Path):
+    """Make a per-user SNAP_COMMON subdirectory (homes/<user>, containers/<user>)
+    writable by both the root ailab.web daemon and the non-root ailab CLI.
+
+    Under strict snap confinement, ailab.web runs as UID 0 but is denied
+    CAP_DAC_OVERRIDE, so it's still bound by normal DAC permission bits like
+    any other process. Whichever of the two apps creates this directory
+    first (via mkdir's default mode) leaves it writable only by itself and
+    its group — the other one then gets a plain PermissionError creating a
+    container. No-op outside snap mode, where both run as the same user.
+    """
+    if not os.environ.get("SNAP_COMMON"):
+        return
+    try:
+        path.chmod(0o777)
+    except OSError:
+        pass
+
+
 def build_shell_welcome(container_name: str) -> str:
     """Build a contextual SHELL_WELCOME message based on installed tools."""
     cname = _container_name(container_name)
     _, _, _, home = get_container_user(cname)
-    # Token lives in the host-side config dir (created by the installer with
-    # host ownership), not inside the container's subuid-owned home.
-    token_file = container_config_dir(container_name, home) / "openclaw" / "gateway-token"
+    # Token lives in openclaw.json inside the container (written by the
+    # nimbus-app-store post-install script), read via the LXD file API so
+    # subuid ownership inside the container doesn't matter.
+    openclaw_config = None
+    try:
+        openclaw_config = pull_file(cname, f"{home}/.openclaw/openclaw.json")
+    except Exception:
+        pass
 
     lines = ["Welcome to your AI Lab container!\n"]
 
-    if token_file.exists():
-        gateway_token = token_file.read_text().strip() or None
+    if openclaw_config is not None:
+        gateway_token = None
+        try:
+            gateway_token = json.loads(openclaw_config).get("gateway", {}).get("auth", {}).get("token")
+        except (json.JSONDecodeError, AttributeError):
+            pass
 
         if gateway_token:
             lines += [
@@ -951,11 +980,13 @@ def create_container(
     container_home = _container_home_dir(home, name)
     container_home.mkdir(parents=True, exist_ok=True)
     _chown(container_home, uid, gid)
+    _ensure_writable_user_dir(container_home.parent)
 
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     _chown(cfg_dir, uid, gid)
+    _ensure_writable_user_dir(cfg_dir.parent)
 
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
