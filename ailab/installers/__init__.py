@@ -1,13 +1,19 @@
 """Installer registry for ailab."""
 
+from .hermes_agent import HermesAgentInstaller
 from .nullclaw import NullclawInstaller
+from .odysseus import OdysseusInstaller
 from .openclaw import OpenclawInstaller
 from .picoclaw import PicoClawInstaller
+from .zeroclaw import ZeroclawInstaller
 
 INSTALLERS: dict[str, type] = {
+    "hermes-agent": HermesAgentInstaller,
     "nullclaw": NullclawInstaller,
+    "odysseus": OdysseusInstaller,
     "openclaw": OpenclawInstaller,
     "picoclaw": PicoClawInstaller,
+    "zeroclaw": ZeroclawInstaller,
 }
 
 

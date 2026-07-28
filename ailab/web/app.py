@@ -47,12 +47,9 @@ from ailab.container import (
     start_container,
     stop_container,
 )
+from ailab import appstore
 from ailab.installers import INSTALLERS, get_installer
-from ailab.installers.openclaw import (
-    OPENCLAW_GATEWAY_PORT,
-    OPENCLAW_WS_PATH,
-    OpenclawInstaller,
-)
+from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller
 from ailab.cloud import CloudTunnelManager
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -422,30 +419,6 @@ async def api_remove_port(name: str, device_name: str):
 
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
-def _read_gateway_token(token_dir: Path) -> str | None:
-    """Read the gateway shared token from the host-side gateway-token file.
-
-    token_dir is container_config_dir(name, home) / "openclaw" — a directory
-    created by the installer process with host-owned permissions, readable by
-    the snap web service regardless of LXD subuid ownership.
-    """
-    token_file = token_dir / "gateway-token"
-    if token_file.exists():
-        token = token_file.read_text().strip()
-        if token:
-            return token
-    return None
-
-
-def _get_or_create_gateway_token(token_dir: Path) -> str:
-    """Return the existing gateway shared token, or generate a new one."""
-    import secrets as _secrets
-    token = _read_gateway_token(token_dir)
-    if token:
-        return token
-    return _secrets.token_urlsafe(32)
-
-
 def _port_base_url(request: Request) -> str:
     """Return the base used to construct port-specific URLs.
 
@@ -541,7 +514,16 @@ def _ensure_gateway_cloud_origin_sync(
 
     logger.info("Added %s to openclaw allowedOrigins in %s, restarting gateway", hub_origin, cname)
     installer = OpenclawInstaller()
-    installer._restart_gateway(cname, uid, gid, home)
+    installer.restart_service(cname)
+
+
+def _catalog_port(app_id: str) -> int:
+    """Return an app's primary port from the nimbus-app-store catalog."""
+    snap = appstore.get_snap(appstore.get_catalog(), app_id)
+    ports = appstore.get_ports(snap) if snap else []
+    if not ports:
+        raise HTTPException(status_code=502, detail=f"Could not resolve '{app_id}' port from the app catalog")
+    return ports[0]
 
 
 @app.get("/api/containers/{name}/gateway-url")
@@ -549,12 +531,13 @@ async def api_gateway_url(name: str, request: Request):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    token_dir = container_config_dir(name, home) / "openclaw"
-    token = _read_gateway_token(token_dir)
+    installer = OpenclawInstaller()
+    token = await asyncio.to_thread(installer._read_gateway_token, cname, home)
     if not token:
-        raise HTTPException(status_code=404, detail="openclaw device token not found")
+        raise HTTPException(status_code=404, detail="openclaw gateway token not found")
+    gateway_port = await asyncio.to_thread(_catalog_port, installer.app_id)
     base = _port_base_url(request)
-    port_url = f"{base}:{OPENCLAW_GATEWAY_PORT}"
+    port_url = f"{base}:{gateway_port}"
     tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
     if tunnel_base:
         # When served through the cloud tunnel, openclaw's JS can't reach the
@@ -582,51 +565,35 @@ async def api_gateway_url(name: str, request: Request):
 
 @app.post("/api/containers/{name}/gateway-pair")
 async def api_gateway_pair(name: str, request: Request):
-    """Run openclaw onboard inside the container to pair the gateway device."""
+    """Ensure the openclaw gateway is configured with a token and restart it."""
     cname = _container_name(name)
     status = await asyncio.to_thread(_container_status, cname)
     if status != "running":
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    token_dir = container_config_dir(name, home) / "openclaw"
+    installer = OpenclawInstaller()
 
-    if not (token_dir / "gateway-token").exists():
+    rc, _, _ = await asyncio.to_thread(
+        container_exec, cname, ["snap", "list", installer.app_id], check=False,
+    )
+    if rc != 0:
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
-    installer = OpenclawInstaller()
     port_base = _port_base_url(request)
+    gateway_port = await asyncio.to_thread(_catalog_port, installer.app_id)
 
     def task():
-        gateway_token = _get_or_create_gateway_token(token_dir)
-        # Refresh the host-side token file in case it was regenerated.
-        token_dir.mkdir(parents=True, exist_ok=True)
-        (token_dir / "gateway-token").write_text(gateway_token)
-        print("Configuring gateway environment...")
-        installer._configure_gateway_env(cname, uid, gid, home, gateway_token)
+        print("Re-running post-install script (config + token)...")
+        installer.run_post_install(name)
+        print("Restarting gateway service...")
+        installer.restart_service(name)
 
-        # If openclaw is already onboarded (has device state in ~/.openclaw/),
-        # just restart the gateway service — no need to re-run onboard.
-        rc, _, _ = container_exec(
-            cname,
-            ["bash", "-c", f"test -d '{home}/.openclaw/devices' || test -d '{home}/.openclaw/identity'"],
-            uid=uid, gid=gid,
-            env={"HOME": home},
-            check=False,
-        )
-        if rc == 0:
-            print("openclaw already onboarded — restarting gateway service...")
-            installer._restart_gateway(cname, uid, gid, home)
-        else:
-            print("Pairing gateway device (this takes ~10 seconds)...")
-            installer._run_onboard(cname, uid, gid, home, gateway_token)
-            installer._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
-
-        token = _read_gateway_token(token_dir)
+        token = installer._read_gateway_token(cname, home)
         if token:
-            print(f"Paired! Dashboard: {port_base}:{OPENCLAW_GATEWAY_PORT}/#token={token}")
+            print(f"Ready! Dashboard: {port_base}:{gateway_port}/#token={token}")
         else:
-            print("Warning: pairing may not have succeeded — check container logs")
+            print("Warning: gateway configuration may not have succeeded — check container logs")
 
     return _sse_stream(task)
 

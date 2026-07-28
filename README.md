@@ -223,17 +223,27 @@ ailab port remove mybox 9000
 
 ## Installable Packages
 
+Packages install as classic-confinement snaps from the
+[nimbus-app-store](https://github.com/kenvandine/nimbus-app-store) catalog —
+the same catalog the [Nimbus](https://github.com/kenvandine/nimbus-appliance)
+appliance uses. `ailab install` fetches the catalog live, `snap install`s the
+package, forwards the ports it declares, and runs its onboarding/post-install
+steps.
+
 | Package | Status | Description |
 |---------|--------|-------------|
 | `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://127.0.0.1:18789`. |
-| `nullclaw` | Experimental (CLI only) | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://127.0.0.1:3000`. |
-| `picoclaw` | Experimental (CLI only) | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://127.0.0.1:18800`. |
+| `nullclaw` | Experimental | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://127.0.0.1:3002`. |
+| `picoclaw` | Supported | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://127.0.0.1:18800`. |
+| `hermes-agent` | Experimental | Autonomous AI agent, 60+ built-in tools, 20+ platform integrations. Web UI at `http://127.0.0.1:9119`. |
+| `odysseus` | Experimental | Self-hosted AI workspace (chat, documents, research). Web UI at `http://127.0.0.1:7000`. |
+| `zeroclaw` | Experimental | Zero-config autonomous AI agent. Web UI at `http://127.0.0.1:3000`. |
 
-All packages use lemonade-server as the primary provider via its
-OpenAI-compatible API, with cloud providers disabled. lemonade-server is
-auto-detected on `localhost:13305` (>= 10.1) or `localhost:8000` (< 10.1).
-`nullclaw` and `picoclaw` also configure ollama on `localhost:11434` as a
-secondary provider.
+Every package uses lemonade-server as its primary provider via its
+OpenAI-compatible API, auto-detected on `localhost:13305` (>= 10.1) or
+`localhost:8000` (< 10.1), and most also configure ollama on
+`localhost:11434` as a secondary provider — each snap's own onboarding tool
+(`<package>.lemonade --auto`) handles this during install.
 
 ## How It Works
 
@@ -241,18 +251,15 @@ secondary provider.
 Your Host
 ├── lemonade-server :13305 (>= 10.1) or :8000 (< 10.1)
 ├── ollama          :11434
-└── ailab container (LXD)
+└── ailab container (LXD, privileged — required for classic snap confinement)
     ├── localhost:13305  →  host:13305  (lemonade >= 10.1, inbound proxy)
     ├── localhost:8000   →  host:8000   (lemonade < 10.1,  inbound proxy)
-    ├── localhost:11434  →  host:11434  (ollama, inbound proxy)
-    ├── host:7860        →  container:7860   (gradio)
-    ├── host:8888        →  container:8888   (jupyter)
-    ├── host:8501        →  container:8501   (streamlit)
-    └── host:9090        →  container:9090
+    └── localhost:11434  →  host:11434  (ollama, inbound proxy)
 ```
 
-Tool-specific ports (e.g. nullclaw :3000, openclaw :18789) are added when
-the package is installed, not at container creation time.
+Package-specific ports (e.g. openclaw :18789) come from that package's entry
+in the nimbus-app-store catalog and are forwarded when the package is
+installed, not at container creation time.
 
 **LXD REST API**: All container operations use the LXD REST API via `pylxd`,
 not the `lxc` CLI. Container setup runs via cloud-init at creation time,
@@ -270,25 +277,24 @@ create inside the container appear on your host and vice versa.
 tool configs (e.g. `~/.openclaw/openclaw.json`) are automatically per-container.
 You can have two containers running the same tool with different configurations.
 
-**Security nesting**: Containers are created with `security.nesting=true`,
-which enables docker, fuse, and other tools that need kernel features inside
-the container.
+**Privileged + nesting**: Containers are created with `security.nesting=true`
+(docker, fuse, and other tools that need kernel features inside the
+container) and `security.privileged=true` plus syscall interception for
+`mknod`/`setxattr`. The latter are required for `snap install --classic` to
+work inside the container — classic-confinement snaps rely on bind-mount
+tricks that only a privileged container can perform. Containers created
+before this was added need to be recreated (`ailab delete` + `ailab new`)
+before packages can be installed.
 
-## Default Outbound Ports
+## Outbound Ports
 
-These ports are forwarded from every new container to your host by default:
-
-| Port | Common Use |
-|------|-----------|
-| 7860 | Gradio |
-| 8888 | Jupyter |
-| 8501 | Streamlit |
-| 9090 | Prometheus, general |
-
-Additional ports are forwarded when specific packages are installed:
-- nullclaw: 3000
-- openclaw: 18789
-- picoclaw: 18800
+ailab doesn't forward any ports by default at container-creation time.
+Package-specific ports come from that package's entry in the
+nimbus-app-store catalog and are forwarded automatically when you run
+`ailab install <name> <package>` — see the
+[Installable Packages](#installable-packages) table above for each
+package's port. You can forward additional ports yourself with
+`ailab port add`.
 
 When multiple containers are running, ailab automatically skips proxy devices
 whose host port is already bound, so containers can start without conflicts.

@@ -896,7 +896,12 @@ def ensure_ailab_project():
             config={"features.images": "false"},
         )
 
-    profile_config = {"security.nesting": "true"}
+    profile_config = {
+        "security.nesting": "true",
+        "security.privileged": "true",
+        "security.syscalls.intercept.mknod": "true",
+        "security.syscalls.intercept.setxattr": "true",
+    }
     devices = _default_profile_devices()
 
     try:
@@ -1032,6 +1037,12 @@ def create_container(
         "config": {
             "raw.idmap": idmap,
             "security.nesting": "true",
+            # Classic-confinement snaps (openclaw, nullclaw, picoclaw, etc.)
+            # need snap-confine's bind-mount tricks, which only work in a
+            # privileged container. Matches nimbus's container profile.
+            "security.privileged": "true",
+            "security.syscalls.intercept.mknod": "true",
+            "security.syscalls.intercept.setxattr": "true",
             "user.user-data": _cloud_init_userdata(username, uid, gid, home),
             "environment.AILAB_CONFIG_DIR": str(cfg_dir),
             "user.ailab-mapped-user": username,
@@ -1081,6 +1092,11 @@ def create_container(
             print("--- cloud-init-output.log (last 60 lines) ---")
             print(log_out)
             print("---")
+
+    # Wait for snapd to finish seeding so the first `snap install` a package
+    # installer runs doesn't race snapd's own startup. Best-effort: older
+    # images or a slow first boot shouldn't fail container creation.
+    container_exec(cname, ["snap", "wait", "system", "seed.loaded"], check=False)
 
     # Write the AILAB_CONFIG_DIR profile.d snippet (config env is already set above)
     _get_instance(cname).files.put(
