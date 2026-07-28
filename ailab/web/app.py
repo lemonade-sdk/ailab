@@ -5,6 +5,7 @@ import io
 import ipaddress as _ipaddress
 import json
 import logging
+import os
 import socket as _socket
 import sys
 import time as _time
@@ -19,7 +20,6 @@ import pylxd.exceptions
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -51,6 +51,7 @@ from ailab import appstore
 from ailab.installers import INSTALLERS, get_installer
 from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller
 from ailab.cloud import CloudTunnelManager
+from ailab.web.auth import TokenAuthMiddleware, get_or_create_token
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -77,9 +78,41 @@ def _detect_lemonade_port() -> int | None:
             pass
     return None
 
+def _web_port() -> int:
+    """The port this daemon listens on (set by cmd_web / the snap wrapper)."""
+    try:
+        return int(os.environ.get("AILAB_WEB_PORT", "11500"))
+    except ValueError:
+        return 11500
+
+
+def _hub_host_from_env() -> str | None:
+    """Bare hostname of the configured cloud-tunnel hub, or None."""
+    host = os.environ.get("AILAB_CLOUD_HOST", "").strip()
+    if not host:
+        return None
+    for scheme in ("https://", "http://", "wss://", "ws://"):
+        if host.startswith(scheme):
+            host = host[len(scheme):]
+            break
+    return host.rstrip("/").split("/")[0] or None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    tunnel = CloudTunnelManager.from_env()
+    logger.info(
+        "Dashboard URL: http://127.0.0.1:%d/#token=%s", _web_port(), API_TOKEN
+    )
+    tunnel = None
+    try:
+        # Inject our own bearer token when the tunnel forwards hub traffic to
+        # this web port — remote browsers authenticate to the hub via GitHub
+        # OAuth and never see the local token.
+        tunnel = CloudTunnelManager.from_env(web_auth=(_web_port(), API_TOKEN))
+    except ValueError as exc:
+        # Bad cloud settings must not crash-loop the daemon; the local
+        # dashboard should keep working with the tunnel disabled.
+        logger.error("Cloud tunnel disabled — invalid configuration: %s", exc)
     if tunnel:
         await tunnel.start()
     yield
@@ -89,13 +122,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ailab web interface", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# All /api/* routes (HTTP and WebSocket) require this bearer token; see
+# ailab/web/auth.py. The vite dev server proxies /api same-origin, and the
+# built frontend is served by this app itself, so no CORS middleware is
+# needed — cross-origin pages get no access at all.
+API_TOKEN = get_or_create_token()
+app.add_middleware(TokenAuthMiddleware, token=API_TOKEN, hub_host=_hub_host_from_env())
 
 STATIC_DIR = Path(__file__).parent / "static"
 

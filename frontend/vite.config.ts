@@ -10,7 +10,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:11500',
+      // ws: true also proxies the shell/log WebSocket endpoints in dev.
+      '/api': { target: 'http://localhost:11500', ws: true },
     },
   },
 })

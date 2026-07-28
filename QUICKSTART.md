@@ -18,6 +18,6 @@ sudo snap install --dangerous ailab_*.snap
 # Connect the LXD interface
 sudo snap connect ailab:lxd lxd:lxd
 
-# Open the web UI
-xdg-open http://127.0.0.1:11500
+# Open the web UI (the dashboard URL includes its access token)
+xdg-open "$(sudo ailab dashboard)"
 ```

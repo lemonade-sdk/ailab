@@ -4,13 +4,15 @@ Run AI tools safely on Ubuntu — no technical experience required.
 
 AI Lab creates lightweight [LXD](https://ubuntu.com/lxd) containers that are
 pre-wired to use AI services running on your host's lemonade-server.
-Each container shares your home directory, so your files are always accessible,
-while keeping installed software isolated from the rest of your system.
+Each container gets its own isolated home directory (visible on the host under
+`~/ailab/<name>`), keeping both the software an agent installs and the files it
+touches separate from the rest of your system.
 
 ## Features
 
 - **Safe by default** — AI tools run in isolated containers, not on your host system
-- **Your files, always accessible** — home directory is shared into every container
+- **Isolated workspaces** — each container gets its own home directory,
+  accessible from the host at `~/ailab/<name>`; your real home is not exposed
 - **Local AI, zero config** — lemonade-server and ollama are automatically available
   inside containers on `localhost`, proxied from the host
 - **One command, fully configured** — `ailab new mybox --install openclaw` creates
@@ -46,7 +48,16 @@ snap set ailab web.host=127.0.0.1   # default: 127.0.0.1
 snap set ailab web.port=11500        # default: 11500
 ```
 
-Then open `http://127.0.0.1:11500` in your browser.
+The dashboard requires an access token (it controls containers and provides
+interactive shells, so it is not left open to any local page or process).
+Get a ready-to-open URL with:
+
+```bash
+sudo ailab dashboard
+```
+
+and open the printed `http://127.0.0.1:11500/#token=…` link in your browser.
+The browser remembers the token, so this is only needed once per machine.
 
 ### From the PPA
 
@@ -192,12 +203,25 @@ creating, starting, stopping, and deleting containers. Includes:
 
 ```bash
 ailab web                    # binds to 127.0.0.1:11500
-ailab web --host 0.0.0.0    # expose on the local network
+ailab web --host 0.0.0.0    # expose on the local network (trusted networks only)
 ailab web --port 9000        # use a different port
 ailab web --reload           # auto-reload on code changes (development)
 ```
 
-Then open `http://127.0.0.1:11500` in your browser.
+Every `/api` route — including the shell and log WebSockets — requires a
+bearer token, generated on first start and stored under the snap's data
+directory (or `~/.local/share/ailab/web-token` for non-snap installs).
+`ailab web` prints the tokenized dashboard URL at startup, and you can
+retrieve it any time with:
+
+```bash
+ailab dashboard          # sudo ailab dashboard under the snap
+```
+
+Open the printed `http://127.0.0.1:11500/#token=…` URL; the frontend stores
+the token in the browser and strips it from the address bar. Cloud-tunnel
+access is unaffected: the hub authenticates you with GitHub OAuth and the
+tunnel client presents the local token on your behalf.
 
 ### `ailab port`
 
@@ -268,9 +292,12 @@ so no restart is needed and configuration is applied atomically.
 keeping them separate from any other LXD containers on your system. You can
 see them with `lxc --project ailab list`.
 
-**Home directory**: Your host home directory is bind-mounted into the container
-at the same path using `raw.idmap` for correct UID/GID passthrough. Files you
-create inside the container appear on your host and vice versa.
+**Home directory**: Each container gets an isolated home directory —
+`~/ailab/<name>` on the host (or under the snap's data directory for snap
+installs) — bind-mounted at your home path inside the container using
+`raw.idmap` for correct UID/GID passthrough. The container sees only this
+directory, not your real home; files you create inside it appear on the host
+under `~/ailab/<name>` and vice versa.
 
 **Per-container config**: Each container has an isolated home directory, so
 tool configs (e.g. `~/.openclaw/openclaw.json`) are automatically per-container.

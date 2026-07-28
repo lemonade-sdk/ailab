@@ -148,10 +148,17 @@ class CloudConfig:
 
 
 class CloudTunnelManager:
-    """Manages a persistent WebSocket tunnel to the ailab-cloud hub."""
+    """Manages a persistent WebSocket tunnel to the ailab-cloud hub.
 
-    def __init__(self, config: CloudConfig) -> None:
+    web_auth: optional (port, token) pair for the local ailab web API. The
+    web API requires a bearer token; remote browsers authenticate to the hub
+    (GitHub OAuth) and never hold the local token, so the tunnel client
+    injects it when forwarding hub traffic to that port.
+    """
+
+    def __init__(self, config: CloudConfig, web_auth: tuple[int, str] | None = None) -> None:
         self._config = config
+        self._web_auth = web_auth
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
         # Active proxied WebSocket connections keyed by conn_id.
@@ -182,11 +189,11 @@ class CloudTunnelManager:
         logger.info("Registered with hub as device '%s'", self._config.device_id)
 
     @classmethod
-    def from_env(cls) -> "CloudTunnelManager | None":
+    def from_env(cls, web_auth: tuple[int, str] | None = None) -> "CloudTunnelManager | None":
         config = CloudConfig.from_env()
         if config is None:
             return None
-        return cls(config)
+        return cls(config, web_auth=web_auth)
 
     async def start(self) -> None:
         """Start the background reconnect loop."""
@@ -357,6 +364,10 @@ class CloudTunnelManager:
 
         fwd_headers = {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP}
 
+        # Authenticate to the local ailab web API on the hub's behalf.
+        if self._web_auth and port == self._web_auth[0]:
+            fwd_headers["Authorization"] = f"Bearer {self._web_auth[1]}"
+
         url = f"http://127.0.0.1:{port}{path}"
         try:
             body: bytes | None = base64.b64decode(body_b64, validate=True) if body_b64 else None
@@ -429,6 +440,10 @@ class CloudTunnelManager:
         extra_headers: dict[str, str] = {}
         if "token" in qs:
             extra_headers["Authorization"] = f"Bearer {qs.pop('token')[0]}"
+        # Authenticate to the local ailab web API (shell/logs WebSockets) on
+        # the hub's behalf — remote browsers never hold the local token.
+        if self._web_auth and port == self._web_auth[0]:
+            extra_headers["Authorization"] = f"Bearer {self._web_auth[1]}"
         clean_qs = urlencode({k: v[0] for k, v in qs.items()})
         local_path = parsed_path._replace(query=clean_qs).geturl()
         url = f"ws://127.0.0.1:{port}{local_path}"

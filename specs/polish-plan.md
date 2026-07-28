@@ -1,0 +1,128 @@
+# AI Lab polish plan — review findings and phased work
+
+Comprehensive review (2026-07-28) of ailab on branch `nimbus-appstore`, focused on
+making it the best, easiest, and most secure way to run AI agents (openclaw,
+hermes, etc.) in LXD containers — CLI + web, installed as a strict snap.
+
+Note: privileged containers are **required** for classic-confinement snaps
+(snap-confine's bind-mount tricks), so the "unprivileged containers"
+investigation is intentionally **skipped** — instead, document the threat model
+honestly.
+
+## Review findings
+
+### 🔴 Security
+
+1. **Web API and WebSocket shell have zero authentication.**
+   - `CORSMiddleware(allow_origins=["*"], allow_credentials=True)`
+     (`web/app.py`) lets any website read API responses cross-origin.
+   - WebSockets are not subject to CORS: a drive-by web page can open
+     `ws://127.0.0.1:11500/api/ws/shell/<name>` and get an interactive shell
+     in a privileged container. No Origin check on `shell_ws` / `logs_ws`.
+   - `ailab web` CLI default is `--host ::` (all interfaces) while README
+     claims 127.0.0.1. (Snap wrapper defaults to 127.0.0.1; bare CLI doesn't.)
+
+2. **Cross-user privilege escalation via `username`.**
+   `POST /api/containers/create` accepts any `username`; `/api/users` lists
+   candidates, unauthenticated. Daemon runs as root → any local user (or any
+   website per #1) can create a container mapped to another user's uid and
+   shell into it.
+
+3. **Privileged containers are not a security boundary** but README says
+   "Safe by default". Required for classic snaps, so keep — but document the
+   threat model honestly. The isolated per-container home
+   (`~/ailab/<name>` only, not the full home) is the real mitigation; README
+   lines still claim the full home is shared (wrong and scarier than reality).
+
+4. **Runtime `curl | bash` supply chain**: cloud-init pipes bun/homebrew/
+   nodesource installers; catalog post-install scripts fetched from a branch
+   head, unpinned. Contained to the container; future: pinning/checksums.
+
+5. **Invalid cloud settings crash-loop the daemon.** `CloudConfig.from_env()`
+   raises inside FastAPI lifespan → uvicorn dies → restart loop. The configure
+   hook validates `web.*` but not `cloud.*`.
+
+### 🟠 Correctness bugs
+
+| Where | Bug |
+|---|---|
+| `container.py` ~1088 | "Remove conflicting proxy devices" loop is a no-op — both branches identical. Creation does NOT skip in-use ports (README says it does). |
+| `web/app.py` (2 places) | Inbound/outbound classification checks `bind == "instance"`, but devices use `bind: "container"` — inbound proxies misreported as outbound. |
+| `container.py` welcome | Says `ailab install openclaw <name>` — args reversed. |
+| `web/app.py` `_sse_stream` | Swaps global `sys.stdout`; concurrent operations interleave logs and restore stdout under each other. Needs per-task capture (contextvar). |
+| `cli.py` `cmd_web` | `--reload` can't work with `uvicorn.run(app_object)`; needs import string. |
+| `cli.py` `_complete` | `commands` list omits `web`. |
+| `container.py` `_host_port_in_use` | Uses `bind()`; CLI app plug set lacks `network-bind` — verify under strict confinement (if denied, every port looks in use). |
+| `container.py` `list_containers` | One state round-trip per container — slow. Also in web `_container_summary`. |
+
+### 🟡 CLI / UX gaps
+
+- No `ailab doctor` / first-run diagnostics (LXD missing, not initialised,
+  interface not connected, lxd group, lemonade not running → raw tracebacks).
+- No `ailab info`, `ailab logs`; no CLI parity for gateway URL (print
+  tokenized dashboard URL after install).
+- `ailab packages` shows only the static fallback table, not the live catalog.
+- Man page / completions stale; no zsh/fish completions.
+
+### 🟡 Snap / packaging / CI
+
+- No `icon:` or store assets in snapcraft.yaml.
+- No snap build or install smoke test in CI (only deb/lintian).
+- README/QUICKSTART drift: home-sharing claims, web bind default, "skips
+  conflicting proxies at creation".
+- No unit tests. Cheap targets: `appstore.py`, `_partition_conflicting_proxies`,
+  `CloudConfig._normalize_ports`, CLI parser. LXD integration job feasible.
+
+### 🟢 Already good — keep
+
+Catalog-driven installers with live-catalog-first resolution; isolated
+per-container homes; cloud-init atomic provisioning; SSE keepalives; tunnel
+port allowlisting + header hygiene; sticky-bit SNAP_COMMON layout; the real
+port-conflict restore logic in `start_container`.
+
+## Phases
+
+### Phase 0 — Security hardening  ✅ DONE (2026-07-28, unreleased)
+1. Token auth for web API + WebSockets. Token generated/persisted under
+   SNAP_COMMON at daemon start; required on every `/api/*` route and WS
+   handshake; frontend gets it via `#token=…` URL (printed by CLI/snap).
+   Origin allowlist on WS endpoints.
+2. Drop wildcard CORS; allow only own origin + tunnel origin.
+3. `ailab web` CLI default → 127.0.0.1; wide binds need explicit flag.
+4. Lock down `username` mapping (only for authenticated/admin callers).
+5. Validate `cloud.*` in configure hook; `from_env` failures log-and-disable
+   instead of crash-looping.
+
+### Phase 1 — Correctness fixes  ✅ DONE (2026-07-28, unreleased)
+All bugs in the table above. Notes:
+- Auth lives in `ailab/web/auth.py` (ASGI middleware, covers HTTP + WS);
+  token file `web-token` under SNAP_COMMON / XDG data dir, 0600.
+- Tunnel client injects the local bearer token for the web port
+  (`CloudTunnelManager(web_auth=(port, token))`); remote users authenticate
+  via the hub's GitHub OAuth.
+- New CLI command: `ailab dashboard` (prints tokenized URL; sudo under snap).
+- `_sse_stream` now routes print() through a contextvar-keyed stdout proxy;
+  pylxd stream handlers are context-bound in `container.py` because pylxd
+  invokes them from its own websocket threads.
+- `_host_port_in_use` switched bind()→connect_ex() so it works with only the
+  `network` plug under strict confinement.
+- Heads-up: ruff ≥0.16 broadened its default rule set; CI's bare
+  `ruff check ailab/` may start failing on pre-existing style issues.
+  Pin ruff or set an explicit `[tool.ruff]` select in Phase 5.
+
+### ~~Phase 2 — Unprivileged containers~~  SKIPPED
+Privileged is required for classic snaps. Instead: honest threat-model docs.
+
+### Phase 3 — CLI intuitiveness
+`ailab doctor`, friendly pre-flight errors on `new`, `ailab info`,
+`ailab logs`, live-catalog `ailab packages`, print dashboard URL after
+install, fix man page + completions.
+
+### Phase 4 — Web UX
+Host-status strip (lemonade/ollama/tunnel state), login/token flow, fixed
+port-direction display, concurrent-safe progress logs, error toasts.
+
+### Phase 5 — Packaging, CI, docs
+Snap icon + store metadata; snapcraft build + install smoke test in CI; unit
+tests; LXD integration job; rewrite README/QUICKSTART to match reality
+(isolated home, actual defaults, threat-model section).

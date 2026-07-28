@@ -92,8 +92,16 @@ def cmd_packages(args):
 
 
 def cmd_web(args):
+    import os
+
     import uvicorn
-    from .web.app import app
+
+    # Let the app (and the cloud tunnel client) know its own port for
+    # dashboard-URL logging and tunnel auth injection.
+    os.environ["AILAB_WEB_PORT"] = str(args.port)
+
+    from .web.app import API_TOKEN, app
+
     # Wildcard bind addresses aren't valid URLs to click on, so show a
     # browser-friendly host instead.  IPv6 literals need bracket-wrapping.
     if args.host in ("::", "0.0.0.0", ""):
@@ -103,7 +111,26 @@ def cmd_web(args):
     else:
         display_host = args.host
     print(f"Starting ailab web interface at http://{display_host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+    print(f"Dashboard (with access token): http://{display_host}:{args.port}/#token={API_TOKEN}")
+    if args.reload:
+        # uvicorn's reloader needs an import string, not an app object.
+        uvicorn.run("ailab.web.app:app", host=args.host, port=args.port, reload=True)
+    else:
+        uvicorn.run(app, host=args.host, port=args.port)
+
+
+def cmd_dashboard(args):
+    from .web.auth import read_token, token_file_path
+
+    token = read_token()
+    if not token:
+        print(f"No web API token found at {token_file_path()}.")
+        print("Either the web daemon has not started yet, or you cannot read the file.")
+        print("  Snap:     sudo ailab dashboard")
+        print("  Non-snap: ailab web   (generates the token on first start)")
+        sys.exit(1)
+    url = f"http://127.0.0.1:{args.port}/#token={token}"
+    print(url)
 
 
 def cmd_complete(args):
@@ -114,7 +141,7 @@ def cmd_complete(args):
 
     if args.kind == "commands":
         for name in ("new", "run", "stop", "list", "ls", "delete", "rm",
-                     "install", "packages", "pkgs", "port"):
+                     "install", "packages", "pkgs", "port", "web", "dashboard"):
             print(name)
         return
 
@@ -280,10 +307,31 @@ examples:
 
     # ── web ────────────────────────────────────────────────────────────────────
     p_web = sub.add_parser("web", help="Start the ailab web management interface")
-    p_web.add_argument("--host", default="::", help="Host to bind to (default: :: — dual-stack IPv4+IPv6)")
+    p_web.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Host to bind to (default: 127.0.0.1 — local only). "
+            "The API grants full container control to anyone who can reach it; "
+            "only bind wider (e.g. 0.0.0.0) on a trusted network."
+        ),
+    )
     p_web.add_argument("--port", "-p", type=int, default=11500, help="Port to listen on (default: 11500)")
     p_web.add_argument("--reload", action="store_true", help="Enable auto-reload (development)")
     p_web.set_defaults(func=cmd_web)
+
+    # ── dashboard ──────────────────────────────────────────────────────────────
+    p_dash = sub.add_parser(
+        "dashboard",
+        help="Print the tokenized web dashboard URL",
+        description=(
+            "Print the local dashboard URL including the API access token.\n"
+            "Under the snap the token file is root-owned: use sudo ailab dashboard."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_dash.add_argument("--port", "-p", type=int, default=11500, help="Web interface port (default: 11500)")
+    p_dash.set_defaults(func=cmd_dashboard)
 
     # ── port ───────────────────────────────────────────────────────────────────
     p_port = sub.add_parser("port", help="Manage port proxies for a sandbox")
