@@ -1,6 +1,7 @@
 """LXD container management for ailab — via LXD REST API (pylxd)."""
 
 import asyncio
+import contextvars
 import json
 import os
 import pwd
@@ -203,14 +204,15 @@ def _wait_for_ready(cname: str, timeout: int = 30):
 
 
 def _host_port_in_use(port: int) -> bool:
-    """Return True if a TCP port is already bound on the host."""
+    """Return True if something is listening on a host TCP port.
+
+    Uses connect() rather than bind(): under strict snap confinement the CLI
+    app has the ``network`` plug but not ``network-bind``, so a bind() probe
+    would be denied and every port would look "in use".
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(("127.0.0.1", port))
-            return False
-        except OSError:
-            return True
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def _partition_conflicting_proxies(
@@ -374,7 +376,7 @@ def build_shell_welcome(container_name: str) -> str:
         lines += [
             "No AI tools are installed yet.",
             "From the host, install a tool into this container:",
-            "  ailab install openclaw " + container_name,
+            f"  ailab install {container_name} openclaw",
         ]
 
     return "\n".join(lines)
@@ -417,6 +419,17 @@ def set_container_env(cname: str, env: dict[str, str], profile_name: str | None 
 
 # ── Public exec API (used by installers) ─────────────────────────────────────
 
+def _context_bound(fn):
+    """Return fn bound to the caller's contextvars context.
+
+    pylxd invokes stream handlers from its own websocket threads, which do
+    not inherit contextvars; binding them keeps context-aware output routing
+    (e.g. the web UI's per-operation SSE log capture) working.
+    """
+    ctx = contextvars.copy_context()
+    return lambda *a, **k: ctx.run(fn, *a, **k)
+
+
 def container_exec(
     cname: str,
     cmd: list[str],
@@ -448,8 +461,10 @@ def container_exec(
     if stdin is not None:
         kwargs["stdin_payload"] = stdin.encode() if isinstance(stdin, str) else stdin
     if stream:
-        kwargs["stdout_handler"] = lambda s: print(s, end="", flush=True)
-        kwargs["stderr_handler"] = lambda s: print(s, end="", file=sys.stderr, flush=True)
+        kwargs["stdout_handler"] = _context_bound(lambda s: print(s, end="", flush=True))
+        kwargs["stderr_handler"] = _context_bound(
+            lambda s: print(s, end="", file=sys.stderr, flush=True)
+        )
 
     result = instance.execute(cmd, **kwargs)
 
@@ -1085,18 +1100,24 @@ def create_container(
     print(f"Creating container '{cname}' from {BASE_IMAGE_ALIAS} ({BASE_IMAGE_SERVER})...")
     client = _client()
 
-    # Remove any proxy devices that conflict with in-use ports (best-effort)
-    safe_devices = {}
-    for dev_name, dev_cfg in devices.items():
-        if dev_cfg.get("type") == "proxy" and dev_cfg.get("bind") == "host":
-            safe_devices[dev_name] = dev_cfg
-        else:
-            safe_devices[dev_name] = dev_cfg
+    # Leave out outbound proxy devices whose host port is already in use so
+    # the container can still start; they are added back to the config after
+    # startup so they activate once the port is freed (mirrors start_container).
+    conflicting, safe_devices = _partition_conflicting_proxies(devices)
+    if conflicting:
+        names = ", ".join(sorted(conflicting))
+        print(f"Warning: host ports already in use — deferring proxy device(s): {names}")
     config["devices"] = safe_devices
 
     instance = client.instances.create(config, wait=True)
     print(f"Starting container '{cname}'...")
     instance.start(wait=True)
+
+    if conflicting:
+        # Persist the deferred proxies so they work once the port is free.
+        instance = _get_instance(cname)
+        instance.devices = {**instance.devices, **conflicting}
+        instance.save(wait=True)
 
     print("Waiting for network...")
     _wait_for_network(cname)
@@ -1106,8 +1127,10 @@ def create_container(
     instance = _get_instance(cname)
     instance.execute(
         ["cloud-init", "status", "--wait"],
-        stdout_handler=lambda s: print(s, end="", flush=True),
-        stderr_handler=lambda s: print(s, end="", file=sys.stderr, flush=True),
+        stdout_handler=_context_bound(lambda s: print(s, end="", flush=True)),
+        stderr_handler=_context_bound(
+            lambda s: print(s, end="", file=sys.stderr, flush=True)
+        ),
     )
     # Verify cloud-init did not error
     rc, out, _ = container_exec(cname, ["cloud-init", "status"], check=False)
@@ -1288,7 +1311,9 @@ def list_containers():
     client = _client()
     # instances.all() has a project-scoping bug in pylxd 2.4.x that appends
     # '?project=...' to instance names; use the raw API instead.
-    resp = client.api.instances.get(params={"recursion": "1"})
+    # recursion=2 includes live state (IP addresses) in one round-trip
+    # instead of one state request per container.
+    resp = client.api.instances.get(params={"recursion": "2"})
     containers = resp.json().get("metadata", [])
 
     if not containers:
@@ -1303,16 +1328,14 @@ def list_containers():
         status = c.get("status", "unknown")
         ipv4 = ""
 
-        # Fetch live state for IP address
-        try:
-            state = client.instances.get(cname).state()
-            for iface in (state.network or {}).values():
-                for addr in iface.get("addresses", []):
-                    if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                        ipv4 = addr["address"]
-                        break
-        except Exception:
-            pass
+        network = (c.get("state") or {}).get("network") or {}
+        for iface in network.values():
+            for addr in iface.get("addresses", []):
+                if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                    ipv4 = addr["address"]
+                    break
+            if ipv4:
+                break
 
         devices = c.get("expanded_devices", {})
         ports = [

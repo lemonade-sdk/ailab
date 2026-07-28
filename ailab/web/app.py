@@ -1,6 +1,7 @@
 """FastAPI web management interface for ailab."""
 
 import asyncio
+import contextvars
 import io
 import ipaddress as _ipaddress
 import json
@@ -163,17 +164,21 @@ class ImportRecipeRequest(BaseModel):
 _get_container_user = get_container_user
 
 
+def _ipv4_from_network(network: dict | None) -> str:
+    """Return the first non-loopback IPv4 from an LXD state network dict."""
+    for iface in (network or {}).values():
+        for addr in iface.get("addresses", []):
+            if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                return addr["address"]
+    return ""
+
+
 def _get_ipv4(client, cname: str) -> str:
     """Return the first non-loopback IPv4 for a container."""
     try:
-        state = client.instances.get(cname).state()
-        for iface in (state.network or {}).values():
-            for addr in iface.get("addresses", []):
-                if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                    return addr["address"]
+        return _ipv4_from_network(client.instances.get(cname).state().network)
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _outbound_ports_from_devices(devices: dict) -> list[int]:
@@ -192,8 +197,8 @@ def _outbound_ports_from_devices(devices: dict) -> list[int]:
     return sorted(ports)
 
 
-def _container_summary(c: dict, client) -> dict:
-    """Build the summary dict for a single container metadata entry."""
+def _container_summary(c: dict) -> dict:
+    """Build the summary dict for a recursion=2 container metadata entry."""
     cname = c["name"]
     mapped_user = c.get("config", {}).get("user.ailab-mapped-user")
     if mapped_user:
@@ -207,7 +212,7 @@ def _container_summary(c: dict, client) -> dict:
     return {
         "name": cname,
         "status": c.get("status", "unknown"),
-        "ipv4": _get_ipv4(client, cname),
+        "ipv4": _ipv4_from_network((c.get("state") or {}).get("network")),
         "outbound_ports": _outbound_ports_from_devices(devices),
         "config_dir": str(container_config_dir(cname, home)),
     }
@@ -230,36 +235,59 @@ def _lxd_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+# Routes print() output to a per-operation SSE queue. A ContextVar (rather
+# than swapping the global sys.stdout) keeps concurrent operations from
+# interleaving each other's logs: asyncio.to_thread copies the calling
+# context into the worker thread, so each task_fn sees only its own queue.
+_sse_route: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "ailab_sse_route", default=None
+)
+
+
+class _StdoutRouter(io.TextIOBase):
+    """Proxy stdout: SSE-captured contexts go to their queue, rest passes through."""
+
+    def __init__(self, fallback):
+        self._fallback = fallback
+
+    def write(self, s):
+        route = _sse_route.get()
+        if route is None:
+            return self._fallback.write(s)
+        loop, queue = route
+        if s.strip():
+            # Must use call_soon_threadsafe: write() is called from a
+            # thread-pool worker, but asyncio.Queue is not thread-safe.
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "log", "msg": s.rstrip()})
+        return len(s)
+
+    def flush(self):
+        if _sse_route.get() is None:
+            self._fallback.flush()
+
+
+if not isinstance(sys.stdout, _StdoutRouter):
+    sys.stdout = _StdoutRouter(sys.stdout)
+
+
 def _sse_stream(task_fn):
     """
     Return a StreamingResponse that runs task_fn() in a thread executor,
-    capturing print() output as SSE log events.
+    capturing its print() output as SSE log events.
     """
     async def generate():
         queue: asyncio.Queue[dict] = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        old_stdout = sys.stdout
-
-        class SSECapture(io.TextIOBase):
-            def write(self, s):
-                if s.strip():
-                    # Must use call_soon_threadsafe: write() is called from a
-                    # thread-pool worker, but asyncio.Queue is not thread-safe.
-                    loop.call_soon_threadsafe(
-                        queue.put_nowait, {"type": "log", "msg": s.rstrip()}
-                    )
-                return len(s)
-
-        sys.stdout = SSECapture()
 
         async def run_task():
+            _sse_route.set((loop, queue))
             try:
-                await loop.run_in_executor(None, task_fn)
+                # to_thread (unlike run_in_executor) propagates contextvars,
+                # so the thread's print() calls route to this queue.
+                await asyncio.to_thread(task_fn)
                 await queue.put({"type": "done"})
             except Exception as exc:
                 await queue.put({"type": "error", "msg": str(exc)})
-            finally:
-                sys.stdout = old_stdout
 
         asyncio.create_task(run_task())
 
@@ -285,9 +313,11 @@ def _sse_stream(task_fn):
 async def api_list_containers():
     def _fetch():
         client = _client()
-        resp = client.api.instances.get(params={"recursion": "1"})
+        # recursion=2 includes live state (IP addresses) in one round-trip
+        # instead of one state request per container.
+        resp = client.api.instances.get(params={"recursion": "2"})
         containers = resp.json().get("metadata", [])
-        return [_container_summary(c, client) for c in containers]
+        return [_container_summary(c) for c in containers]
     return await asyncio.to_thread(_fetch)
 
 
@@ -312,16 +342,18 @@ async def api_get_container(name: str):
             listen = cfg.get("listen", "")
             connect = cfg.get("connect", "")
             bind = cfg.get("bind", "host")
+            # Inbound proxies are created with bind: "container" (LXD also
+            # accepts the alias "instance"); everything else listens on the host.
             entry = {
                 "device": dev_name,
                 "listen": listen,
                 "connect": connect,
-                "direction": "inbound" if bind == "instance" else "outbound",
+                "direction": "outbound" if bind == "host" else "inbound",
             }
-            if bind == "instance":
-                inbound.append(entry)
-            else:
+            if bind == "host":
                 outbound.append(entry)
+            else:
+                inbound.append(entry)
 
         return {
             "name": cname,
@@ -417,7 +449,7 @@ async def api_list_ports(name: str):
             bind = cfg.get("bind", "host")
             ports.append({
                 "device": dev_name,
-                "direction": "inbound" if bind == "instance" else "outbound",
+                "direction": "outbound" if bind == "host" else "inbound",
                 "listen": cfg.get("listen", ""),
                 "connect": cfg.get("connect", ""),
             })
