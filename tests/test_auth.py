@@ -57,6 +57,22 @@ def test_token_created_once_and_persisted(monkeypatch, tmp_path):
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
 
+# ── Bind-host file ───────────────────────────────────────────────────────────
+
+def test_bind_host_round_trips(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("SNAP_COMMON", raising=False)
+
+    assert auth.read_bind_host() is None  # nothing recorded yet
+
+    auth.write_bind_host("0.0.0.0")
+    assert auth.read_bind_host() == "0.0.0.0"
+
+    # A later `ailab web` run with a different --host overwrites it.
+    auth.write_bind_host("127.0.0.1")
+    assert auth.read_bind_host() == "127.0.0.1"
+
+
 # ── Middleware ─────────────────────────────────────────────────────────────────
 
 def _scope(path, token=None, origin=None, host=None, scope_type="http"):

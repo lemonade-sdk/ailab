@@ -28,6 +28,7 @@ from ailab.container import _ailab_data_root
 logger = logging.getLogger("ailab.web.auth")
 
 TOKEN_FILE_NAME = "web-token"
+HOST_FILE_NAME = "web-host"
 
 # WebSocket close code for failed auth (4000-4999 = application-defined).
 _WS_POLICY_VIOLATION = 4401
@@ -65,6 +66,35 @@ def get_or_create_token() -> str:
         f.write(token + "\n")
     logger.info("Generated new web API token at %s", path)
     return token
+
+
+def host_file_path() -> str:
+    return str(_ailab_data_root() / HOST_FILE_NAME)
+
+
+def write_bind_host(host: str) -> None:
+    """Record the address `ailab web` was started with, so `ailab dashboard`
+    (a separate process/invocation) can print links for the right host(s)
+    without guessing. Best-effort: a failure here shouldn't stop the daemon
+    from starting.
+    """
+    path = host_file_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(host + "\n")
+    except OSError:
+        logger.warning("Could not persist web bind host to %s", path)
+
+
+def read_bind_host() -> str | None:
+    """Return the last-recorded bind host, or None if not recorded/readable."""
+    try:
+        with open(host_file_path()) as f:
+            host = f.read().strip()
+        return host or None
+    except OSError:
+        return None
 
 
 def _origin_allowed(origin: str, hub_host: str | None, request_host: str | None = None) -> bool:

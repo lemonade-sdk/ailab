@@ -18,6 +18,7 @@ from .container import (
 )
 from .doctor import DoctorError
 from .installers import INSTALLERS, get_installer
+from .network import bracket_if_ipv6, dashboard_hosts
 
 
 # ── Subcommand handlers ────────────────────────────────────────────────────────
@@ -137,9 +138,10 @@ def cmd_web(args):
 
     import uvicorn
 
-    # Let the app (and the cloud tunnel client) know its own port for
-    # dashboard-URL logging and tunnel auth injection.
+    # Let the app (and the cloud tunnel client) know its own port and host
+    # for dashboard-URL logging and tunnel auth injection.
     os.environ["AILAB_WEB_PORT"] = str(args.port)
+    os.environ["AILAB_WEB_HOST"] = args.host
 
     try:
         from .web.app import API_TOKEN, app
@@ -160,16 +162,18 @@ def cmd_web(args):
             print(f"Check that you own (or can write to) {token_file_path()}.")
         sys.exit(1)
 
-    # Wildcard bind addresses aren't valid URLs to click on, so show a
-    # browser-friendly host instead.  IPv6 literals need bracket-wrapping.
-    if args.host in ("::", "0.0.0.0", ""):
-        display_host = "localhost"
-    elif ":" in args.host:
-        display_host = f"[{args.host}]"
-    else:
-        display_host = args.host
-    print(f"Starting ailab web interface at http://{display_host}:{args.port}")
-    print(f"Dashboard (with access token): http://{display_host}:{args.port}/#token={API_TOKEN}")
+    from .web.auth import write_bind_host
+
+    write_bind_host(args.host)
+
+    # A wildcard bind isn't a valid URL to click on, and isn't reachable at
+    # only 'localhost' either — show every address we could find the host
+    # answers on.  IPv6 literals need bracket-wrapping.
+    hosts = [bracket_if_ipv6(h) for h in dashboard_hosts(args.host)]
+    print(f"Starting ailab web interface on port {args.port}")
+    print("Dashboard (with access token), reachable at:")
+    for h in hosts:
+        print(f"  http://{h}:{args.port}/#token={API_TOKEN}")
     if args.reload:
         # uvicorn's reloader needs an import string, not an app object.
         uvicorn.run("ailab.web.app:app", host=args.host, port=args.port, reload=True)
@@ -178,7 +182,7 @@ def cmd_web(args):
 
 
 def cmd_dashboard(args):
-    from .web.auth import read_token, token_file_path
+    from .web.auth import read_bind_host, read_token, token_file_path
 
     token = read_token()
     if not token:
@@ -187,8 +191,12 @@ def cmd_dashboard(args):
         print("  Snap:     sudo ailab dashboard")
         print("  Non-snap: ailab web   (generates the token on first start)")
         sys.exit(1)
-    url = f"http://127.0.0.1:{args.port}/#token={token}"
-    print(url)
+    # The bind host is recorded by `ailab web` itself; older token files
+    # (written before this existed) won't have it, so fall back to the
+    # loopback-only assumption that was always correct before.
+    bind_host = read_bind_host() or "127.0.0.1"
+    for h in dashboard_hosts(bind_host):
+        print(f"http://{bracket_if_ipv6(h)}:{args.port}/#token={token}")
 
 
 def cmd_complete(args):

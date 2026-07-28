@@ -233,6 +233,18 @@ the token in the browser and strips it from the address bar. Cloud-tunnel
 access is unaffected: the hub authenticates you with GitHub OAuth and the
 tunnel client presents the local token on your behalf.
 
+Bound to `0.0.0.0` (or any wildcard address), both `ailab web` and
+`ailab dashboard` print one tokenized link per address the dashboard is
+actually reachable on — `localhost` plus every LAN/public IP ailab could
+discover on the host — instead of just `localhost`, which wouldn't work from
+another machine:
+
+```
+$ sudo ailab dashboard
+http://localhost:11500/#token=…
+http://192.168.1.50:11500/#token=…
+```
+
 ### `ailab port`
 
 Manage port proxies on a container.

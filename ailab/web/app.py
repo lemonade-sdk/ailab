@@ -49,6 +49,7 @@ from ailab.container import (
     stop_container,
 )
 from ailab import appstore
+from ailab.network import bracket_if_ipv6, dashboard_hosts
 from ailab.installers import INSTALLERS, get_installer
 from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller, openclaw_dashboard_port
 from ailab.cloud import CloudTunnelManager
@@ -97,6 +98,11 @@ def _web_port() -> int:
         return 11500
 
 
+def _web_host() -> str:
+    """The address this daemon is bound to (set by cmd_web / the snap wrapper)."""
+    return os.environ.get("AILAB_WEB_HOST", "127.0.0.1")
+
+
 def _hub_host_from_env() -> str | None:
     """Bare hostname of the configured cloud-tunnel hub, or None."""
     host = os.environ.get("AILAB_CLOUD_HOST", "").strip()
@@ -112,9 +118,9 @@ def _hub_host_from_env() -> str | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _tunnel_manager
-    logger.info(
-        "Dashboard URL: http://127.0.0.1:%d/#token=%s", _web_port(), API_TOKEN
-    )
+    port = _web_port()
+    for host in dashboard_hosts(_web_host()):
+        logger.info("Dashboard URL: http://%s:%d/#token=%s", bracket_if_ipv6(host), port, API_TOKEN)
     tunnel = None
     try:
         # Inject our own bearer token when the tunnel forwards hub traffic to
