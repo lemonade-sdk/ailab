@@ -50,7 +50,7 @@ from ailab.container import (
 )
 from ailab import appstore
 from ailab.installers import INSTALLERS, get_installer
-from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller
+from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller, openclaw_dashboard_port
 from ailab.cloud import CloudTunnelManager
 from ailab.web.auth import TokenAuthMiddleware, get_or_create_token
 
@@ -599,12 +599,18 @@ def _ensure_gateway_cloud_origin_sync(
 
 
 def _catalog_port(app_id: str) -> int:
-    """Return an app's primary port from the nimbus-app-store catalog."""
+    """Return openclaw's dashboard port from the nimbus-app-store catalog.
+
+    Only ever called for openclaw's app_id — uses openclaw_dashboard_port()
+    rather than ports[0] so a reordered or multi-port catalog entry can't
+    silently point the token-authenticated dashboard link at the wrong port.
+    """
     snap = appstore.get_snap(appstore.get_catalog(), app_id)
     ports = appstore.get_ports(snap) if snap else []
-    if not ports:
+    port = openclaw_dashboard_port(ports)
+    if port is None:
         raise HTTPException(status_code=502, detail=f"Could not resolve '{app_id}' port from the app catalog")
-    return ports[0]
+    return port
 
 
 @app.get("/api/containers/{name}/gateway-url")
@@ -655,8 +661,13 @@ async def api_gateway_pair(name: str, request: Request):
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
     installer = OpenclawInstaller()
 
+    # store_name can differ from the catalog's app_id, so resolve it before
+    # checking what's actually installed — otherwise an installed snap under
+    # a different store name would be misdetected as missing.
+    snap = appstore.get_snap(appstore.get_catalog(), installer.app_id)
+    store_name = appstore.get_store_name(snap) if snap else installer.app_id
     rc, _, _ = await asyncio.to_thread(
-        container_exec, cname, ["snap", "list", installer.app_id], check=False,
+        container_exec, cname, ["snap", "list", store_name], check=False,
     )
     if rc != 0:
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")

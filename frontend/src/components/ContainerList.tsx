@@ -15,6 +15,19 @@ interface Props {
   modelRefreshTick: number;
 }
 
+// openclaw's own dashboard/gateway port. The catalog's `ports` list for an
+// app isn't ordered by role, so picking the token-authenticated dashboard
+// port needs to prefer this over just taking ports[0] — a reordered or
+// multi-port catalog entry would otherwise point "Open openclaw" at the
+// wrong port. Mirrors OPENCLAW_DASHBOARD_PORT in ailab/installers/openclaw.py.
+const OPENCLAW_DASHBOARD_PORT = 18789;
+
+function openclawDashboardPort(packages: Package[]): number | null {
+  const ports = packages.find((p) => p.name === 'openclaw')?.ports ?? [];
+  if (ports.length === 0) return null;
+  return ports.includes(OPENCLAW_DASHBOARD_PORT) ? OPENCLAW_DASHBOARD_PORT : ports[0];
+}
+
 /** Build a port -> package-name map from the app catalog (via /api/packages). */
 function gatewayPortsFromPackages(packages: Package[]): Record<number, string> {
   const map: Record<number, string> = {};
@@ -142,7 +155,10 @@ function GatewayButton({ name, port, label, openclawPort }: { name: string; port
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchUrl(); }, [name, port]);
+  // openclawPort loads asynchronously from /api/packages, so it can still be
+  // null on the first render — re-fetch once it resolves, or this button can
+  // get stuck treating openclaw's port as a plain (non-token) gateway port.
+  useEffect(() => { fetchUrl(); }, [name, port, openclawPort]);
 
   useEffect(() => {
     if (!notPaired) return;
@@ -401,7 +417,11 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
   const [packages, setPackages] = useState<Package[]>([]);
 
   useEffect(() => {
-    getPackages().then(setPackages).catch(() => setPackages([]));
+    // On failure, keep whatever packages we already have rather than
+    // clearing to [] — a transient catalog outage would otherwise wipe out
+    // every gateway button and disable the token-based openclaw URL flow
+    // even though the container is still forwarding those ports.
+    getPackages().then(setPackages).catch(() => {});
   }, []);
 
   if (containers.length === 0) {
@@ -414,7 +434,7 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
   }
 
   const gatewayPorts = gatewayPortsFromPackages(packages);
-  const openclawPort = packages.find((p) => p.name === 'openclaw')?.ports[0] ?? null;
+  const openclawPort = openclawDashboardPort(packages);
 
   const handleStart = async (name: string) => {
     try { await startContainer(name); onRefresh(); }

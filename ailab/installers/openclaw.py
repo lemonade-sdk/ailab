@@ -11,6 +11,21 @@ from ..container import get_container_user, pull_file
 # detail of openclaw's gateway, not an install/onboard step.
 OPENCLAW_WS_PATH = "/__openclaw__/ws"
 
+# openclaw's own dashboard/gateway port. The catalog's `ports` list for an
+# app isn't ordered by role, so code that specifically needs *this* port
+# (not just "some forwarded port") should prefer it when present rather than
+# assuming ports[0] — a reordered or multi-port catalog entry would
+# otherwise silently point the token-authenticated dashboard link at the
+# wrong port.
+OPENCLAW_DASHBOARD_PORT = 18789
+
+
+def openclaw_dashboard_port(ports: list[int]) -> int | None:
+    """Pick the dashboard port out of an openclaw catalog entry's ports."""
+    if not ports:
+        return None
+    return OPENCLAW_DASHBOARD_PORT if OPENCLAW_DASHBOARD_PORT in ports else ports[0]
+
 
 class OpenclawInstaller(CatalogAppInstaller):
     app_id = "openclaw"
@@ -44,6 +59,7 @@ class OpenclawInstaller(CatalogAppInstaller):
             return []
         snap = appstore.get_snap(appstore.get_catalog(), self.app_id)
         ports = appstore.get_ports(snap) if snap else []
-        if not ports:
+        port = openclaw_dashboard_port(ports)
+        if port is None:
             return []
-        return [f"  Dashboard: http://localhost:{ports[0]}/#token={token}"]
+        return [f"  Dashboard: http://localhost:{port}/#token={token}"]

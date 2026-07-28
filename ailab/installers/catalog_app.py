@@ -61,13 +61,23 @@ class CatalogAppInstaller:
         channel = appstore.get_channel(snap)
         flags = appstore.get_install_flags(snap)
 
-        install_cmd = ["snap", "install", store_name]
-        if "--classic" in flags:
-            install_cmd.append("--classic")
+        install_cmd = ["snap", "install", store_name, *flags]
         if channel:
             install_cmd.append(f"--channel={channel}")
         print(f"Installing {store_name} (snap, channel={channel or 'stable'})...")
-        container_exec(cname, install_cmd)
+        exit_code, stdout, stderr = container_exec(cname, install_cmd, check=False)
+        if exit_code != 0:
+            if "already installed" in stderr.lower():
+                # Reinstalling is how `ailab install` doubles as "refresh this
+                # package's config" — the onboard command and post-install
+                # script below still re-run even though the snap itself didn't
+                # change, so this isn't actually a no-op for the user.
+                print(f"  {store_name} is already installed; continuing.")
+            else:
+                raise RuntimeError(
+                    f"Failed to install '{store_name}' (exit {exit_code}):\n"
+                    f"{stderr.strip() or stdout.strip()}"
+                )
 
         ports = appstore.get_ports(snap)
         if ports:
@@ -192,12 +202,16 @@ class CatalogAppInstaller:
         # "enable --now" during install is belt-and-suspenders — the snap's
         # own CLI launcher (run via the onboard command) already installs
         # and enables its unit. "restart" is used to pick up config changes.
+        #
+        # Run as argv lists rather than a `bash -c` string: service_name
+        # comes from the live nimbus-app-store catalog, so shelling it out
+        # unescaped would be a command-injection vector if the catalog were
+        # ever compromised or MITM'd.
         container_exec(
-            cname,
-            ["bash", "-c",
-             "systemctl --user daemon-reload 2>/dev/null || true"
-             f" && systemctl --user {action} {service_name} 2>/dev/null || true"],
-            uid=uid, gid=gid,
-            env=env,
-            check=False,
+            cname, ["systemctl", "--user", "daemon-reload"],
+            uid=uid, gid=gid, env=env, check=False,
+        )
+        container_exec(
+            cname, ["systemctl", "--user", *action.split(), service_name],
+            uid=uid, gid=gid, env=env, check=False,
         )

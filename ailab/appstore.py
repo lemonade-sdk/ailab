@@ -9,6 +9,7 @@ approach the nimbus appliance's backend uses.
 """
 
 import json
+import shlex
 import time
 import urllib.error
 import urllib.request
@@ -82,7 +83,14 @@ def get_onboard_cmd(snap: dict) -> tuple[str, list[str]] | None:
     raw = (snap.get("onboard_cmd") or "").strip()
     if not raw:
         return None
-    parts = raw.split()
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        # Malformed quoting in catalog data (e.g. an unbalanced quote) —
+        # fall back to whitespace splitting rather than failing the install.
+        parts = raw.split()
+    if not parts:
+        return None
     return parts[0], parts[1:]
 
 

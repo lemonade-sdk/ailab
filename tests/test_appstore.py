@@ -59,6 +59,16 @@ def test_onboard_cmd_split():
     assert appstore.get_onboard_cmd(nullclaw) is None
 
 
+def test_onboard_cmd_split_honors_quoting():
+    snap = {"onboard_cmd": 'app.setup --path "/home/my user/config"'}
+    assert appstore.get_onboard_cmd(snap) == ("app.setup", ["--path", "/home/my user/config"])
+
+
+def test_onboard_cmd_split_falls_back_on_malformed_quoting():
+    snap = {"onboard_cmd": "app.setup --path 'unterminated"}
+    assert appstore.get_onboard_cmd(snap) == ("app.setup", ["--path", "'unterminated"])
+
+
 def test_post_install_script_url_joins_base():
     url = appstore.get_post_install_script_url(CATALOG, CATALOG["snaps"][0])
     assert url == "https://example.com/catalog/scripts/openclaw.sh"

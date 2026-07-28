@@ -334,11 +334,16 @@ def _ensure_writable_user_dir(path: Path):
     first (via mkdir's default mode) leaves it writable only by itself and
     its group — the other one then gets a plain PermissionError creating a
     container. No-op outside snap mode, where both run as the same user.
+
+    Sets the sticky bit (mode 1777, like /tmp) rather than plain 777: both
+    ailab.web and the CLI still need to create entries here regardless of
+    which local user owns them, but sticky prevents one local user from
+    deleting or renaming another's homes/<user> or containers/<user> entry.
     """
     if not os.environ.get("SNAP_COMMON"):
         return
     try:
-        path.chmod(0o777)
+        path.chmod(0o1777)
     except OSError:
         pass
 
