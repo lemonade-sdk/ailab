@@ -1198,6 +1198,27 @@ def _find_outbound_proxy_device(instance, host_port: int) -> str | None:
     return None
 
 
+def _find_inbound_proxy_device(instance, port: int) -> str | None:
+    """Return the name of an existing inbound proxy device (container →
+    host) whose container-side listen port or host-side connect port
+    matches `port`, or None if not found.
+
+    add_port() names a custom inbound device after its container-side
+    port (proxy-in-custom-{container_port}), but the CLI's `port remove`
+    only takes a single port number without saying which side it means —
+    matching against both sides avoids reconstructing (and getting wrong)
+    a device name when host_port and container_port differ.
+    """
+    for dev_name, cfg in instance.expanded_devices.items():
+        if cfg.get("type") != "proxy" or cfg.get("bind") != "container":
+            continue
+        listen_port = cfg.get("listen", "").rsplit(":", 1)[-1]
+        connect_port = cfg.get("connect", "").rsplit(":", 1)[-1]
+        if str(port) in (listen_port, connect_port):
+            return dev_name if dev_name in instance.devices else None
+    return None
+
+
 def add_port(
     name: str,
     host_port: int,
@@ -1277,9 +1298,13 @@ def remove_port(name: str, host_port: int, direction: str = "outbound"):
             instance.save(wait=True)
             print(f"Narrowed '{existing}' back to 127.0.0.1:{host_port} → container:{container_port}")
     else:
-        dev_name = f"proxy-in-custom-{host_port}"
-        remove_proxy_device(cname, dev_name)
-        print(f"Removed proxy device '{dev_name}'")
+        instance = _get_instance(cname)
+        existing = _find_inbound_proxy_device(instance, host_port)
+        if not existing:
+            print(f"No inbound proxy found on port {host_port}.")
+            return
+        remove_proxy_device(cname, existing)
+        print(f"Removed proxy device '{existing}'")
 
 
 def list_ports(name: str):

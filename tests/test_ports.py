@@ -40,3 +40,66 @@ def test_partition_conflicting_proxies(monkeypatch):
 def test_host_port_probe_uses_connect_not_bind():
     # A port nothing listens on should read as free (connect_ex != 0).
     assert container._host_port_in_use(1) is False
+
+
+# ── add_port / remove_port ──────────────────────────────────────────────────
+
+class _FakeInstance:
+    def __init__(self, devices):
+        self.devices = devices
+        self.saved = 0
+
+    @property
+    def expanded_devices(self):
+        return self.devices
+
+    def save(self, wait=True):
+        self.saved += 1
+
+
+def _patch_instance(monkeypatch, instance):
+    monkeypatch.setattr(container, "_container_status", lambda cname: "running")
+    monkeypatch.setattr(container, "_get_instance", lambda cname: instance)
+
+
+def test_remove_inbound_port_finds_device_by_container_side_port(monkeypatch):
+    """add_port(..., direction='inbound') names the device after the
+    container-side port, not the host-side one it forwards to — removal
+    must locate it by matching either side, not by reconstructing the name
+    from whatever single port number the caller passed."""
+    instance = _FakeInstance({
+        # container listens on 9000, forwards to host's port 9001 —
+        # host_port (9001) and container_port (9000) deliberately differ.
+        "proxy-in-custom-9000": {
+            "type": "proxy", "bind": "container",
+            "listen": "tcp:127.0.0.1:9000", "connect": "tcp:127.0.0.1:9001",
+        },
+    })
+    _patch_instance(monkeypatch, instance)
+
+    container.remove_port("box", 9001, "inbound")  # host-side port
+
+    assert "proxy-in-custom-9000" not in instance.devices
+
+
+def test_remove_inbound_port_also_matches_container_side_port(monkeypatch):
+    instance = _FakeInstance({
+        "proxy-in-custom-9000": {
+            "type": "proxy", "bind": "container",
+            "listen": "tcp:127.0.0.1:9000", "connect": "tcp:127.0.0.1:9001",
+        },
+    })
+    _patch_instance(monkeypatch, instance)
+
+    container.remove_port("box", 9000, "inbound")  # container-side port
+
+    assert "proxy-in-custom-9000" not in instance.devices
+
+
+def test_remove_inbound_port_reports_when_nothing_matches(monkeypatch, capsys):
+    instance = _FakeInstance({})
+    _patch_instance(monkeypatch, instance)
+
+    container.remove_port("box", 55555, "inbound")
+
+    assert "No inbound proxy found on port 55555" in capsys.readouterr().out
