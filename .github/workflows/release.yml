@@ -21,6 +21,10 @@ on:
         description: 'Mark the GitHub release as a pre-release'
         type: boolean
         default: false
+      draft:
+        description: 'Leave the release as a draft so the generated notes can be edited before publishing'
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -71,6 +75,9 @@ jobs:
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
+      # Notes are generated from the PRs merged since the previous tag. With
+      # draft left on (the default) they land in an unpublished release to be
+      # edited by hand; the snap and PPA jobs below still run either way.
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,7 +87,10 @@ jobs:
             --verify-tag \
             --title "$TAG" \
             --generate-notes \
+            ${{ inputs.draft && '--draft' || '' }} \
             ${{ inputs.prerelease && '--prerelease' || '' }}
+
+          echo "::notice::${TAG} release ${{ inputs.draft && 'drafted — edit the notes and publish it' || 'published' }}: $(gh release view "$TAG" --json url -q .url)"
 
   # Both publishers are invoked directly rather than via their own tag/release
   # triggers: events created with GITHUB_TOKEN do not start new workflow runs.
