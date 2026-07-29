@@ -1,0 +1,47 @@
+name: Publish snap
+
+# Commits on main go to the edge channel; version tags (v*) go to candidate.
+# Promotion from candidate to stable stays manual (`snapcraft promote`).
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One publish at a time per ref; a newer commit on main supersedes an
+# in-flight edge build. Tag builds are never cancelled.
+concurrency:
+  group: snap-publish-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  publish:
+    name: Build and publish to ${{ startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The snapcraft override-pull runs `git describe --tags`, so the
+          # full history and tags must be present for adopt-info to work.
+          fetch-depth: 0
+
+      - name: Build snap
+        id: build
+        uses: snapcore/action-build@v1
+
+      - name: Smoke-test the built snap
+        run: |
+          sudo snap install --dangerous "${{ steps.build.outputs.snap }}"
+          ailab --version
+          ailab --help
+
+      - name: Publish
+        uses: snapcore/action-publish@v1
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: ${{ startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge' }}

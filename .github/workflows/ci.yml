@@ -69,8 +69,11 @@ jobs:
         run: pytest -q
 
   # ── Build the strict snap and smoke-test it ─────────────────────────────────
+  # PRs only — on main, snap-publish.yml does the same build and pushes the
+  # result to the edge channel, so building here too would be redundant.
   snap:
     name: Build snap
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
