@@ -3,9 +3,22 @@ name: Release to PPA
 # Triggered when a GitHub Release is published via the web UI.
 # Publishing the release creates the tag, which is available as
 # github.ref_name (e.g. "v0.1.0").  Draft releases do NOT trigger this.
+#
+# release.yml calls this directly instead: a release it creates with
+# GITHUB_TOKEN does not fire the release event below.
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build (e.g. the release tag)
+        type: string
+        required: true
+      version:
+        description: Version without the leading v (e.g. 0.1.6)
+        type: string
+        required: true
 
 
 jobs:
@@ -21,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.ref }}
           # Full history needed so setuptools-scm can resolve the version
           fetch-depth: 0
 
@@ -44,9 +58,14 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Parse version from tag
-        # github.ref_name is the tag name, e.g. "v0.1.0" → VERSION="0.1.0"
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Resolve version
+        # From the caller when invoked by release.yml, otherwise from the tag
+        # name in github.ref_name, e.g. "v0.1.0" → VERSION="0.1.0"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-$GITHUB_REF_NAME}"
+          echo "VERSION=${VERSION#v}" >> "$GITHUB_ENV"
 
       - name: Stamp changelog for ${{ matrix.distro }}
         env:

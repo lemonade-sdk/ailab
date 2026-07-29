@@ -1,0 +1,103 @@
+name: Release
+
+# Cuts a release from the current branch: tags it, publishes a GitHub release
+# with generated notes, then builds the snap into candidate and uploads the
+# source packages to the PPA.
+#
+# The version lives in the tag — setuptools-scm and the snapcraft
+# override-pull both derive it from `git describe` — so there is nothing to
+# bump in-tree beforehand.
+#
+# Promotion of the snap from candidate to stable stays manual:
+#   snapcraft promote ailab --from-channel candidate --to-channel stable
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the leading v (e.g. 0.1.6)'
+        type: string
+        required: true
+      prerelease:
+        description: 'Mark the GitHub release as a pre-release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Never cut two releases at once, and never cancel one part-way through.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and create the GitHub release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Needed for the tag-exists check and for --generate-notes to find
+          # the previous release.
+          fetch-depth: 0
+
+      - name: Validate version
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION#v}"
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$'; then
+            echo "::error::'$VERSION' is not a valid version (expected N.N.N, optionally aN/bN/rcN)"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag $TAG already exists"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Push the tag
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes \
+            ${{ inputs.prerelease && '--prerelease' || '' }}
+
+  # Both publishers are invoked directly rather than via their own tag/release
+  # triggers: events created with GITHUB_TOKEN do not start new workflow runs.
+  snap:
+    name: Snap
+    needs: tag
+    uses: ./.github/workflows/snap-publish.yml
+    with:
+      ref: ${{ needs.tag.outputs.tag }}
+      channel: candidate
+    secrets: inherit
+
+  ppa:
+    name: PPA
+    needs: tag
+    uses: ./.github/workflows/release-ppa.yml
+    with:
+      ref: ${{ needs.tag.outputs.tag }}
+      version: ${{ needs.tag.outputs.version }}
+    secrets: inherit

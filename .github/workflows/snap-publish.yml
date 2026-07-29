@@ -7,6 +7,18 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
+  # release.yml calls this directly: a tag it pushes with GITHUB_TOKEN does
+  # not trigger the push event above.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build (defaults to the triggering ref)
+        type: string
+        required: true
+      channel:
+        description: Store channel to release into
+        type: string
+        default: candidate
 
 permissions:
   contents: read
@@ -14,16 +26,21 @@ permissions:
 # One publish at a time per ref; a newer commit on main supersedes an
 # in-flight edge build. Tag builds are never cancelled.
 concurrency:
-  group: snap-publish-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: snap-publish-${{ inputs.ref || github.ref }}
+  # Only supersede edge builds: never a tag build, never a release run.
+  cancel-in-progress: ${{ inputs.ref == '' && !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   publish:
-    name: Build and publish to ${{ startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge' }}
+    name: Build and publish
     runs-on: ubuntu-latest
+    env:
+      REF: ${{ inputs.ref || github.ref }}
+      CHANNEL: ${{ inputs.channel || (startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge') }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ env.REF }}
           # The snapcraft override-pull runs `git describe --tags`, so the
           # full history and tags must be present for adopt-info to work.
           fetch-depth: 0
@@ -38,10 +55,10 @@ jobs:
           ailab --version
           ailab --help
 
-      - name: Publish
+      - name: Publish to ${{ env.CHANNEL }}
         uses: snapcore/action-publish@v1
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
         with:
           snap: ${{ steps.build.outputs.snap }}
-          release: ${{ startsWith(github.ref, 'refs/tags/') && 'candidate' || 'edge' }}
+          release: ${{ env.CHANNEL }}
