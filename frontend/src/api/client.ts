@@ -1,8 +1,43 @@
-import { Container, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
+import { Container, HostStatus, LemonadeRecipe, Package, PortProxy, SSEEvent, SystemUser } from '../types';
 
 // Use Vite's BASE_URL so API calls resolve correctly whether the app is served
 // from the root (local: '/') or from a tunnel sub-path (e.g. '/d/device:11500/').
 const BASE = `${import.meta.env.BASE_URL}api`;
+
+// ── API token ────────────────────────────────────────────────────────────────
+// The web API requires a bearer token (see ailab/web/auth.py). Locally the
+// user opens a #token=… URL printed by `ailab dashboard` / the daemon log;
+// we stash it in localStorage and strip it from the address bar. Through the
+// cloud tunnel no local token is needed — the tunnel client injects it.
+
+const TOKEN_KEY = 'ailab_api_token';
+
+function initToken(): string | null {
+  const m = window.location.hash.match(/(?:^#|&)token=([^&]+)/);
+  if (m) {
+    localStorage.setItem(TOKEN_KEY, decodeURIComponent(m[1]));
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+let apiToken: string | null = initToken();
+
+export function clearToken(): void {
+  apiToken = null;
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export class AuthError extends Error {
+  constructor() {
+    super('Not authenticated');
+    this.name = 'AuthError';
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
+}
 
 /**
  * Construct an absolute WebSocket URL for `path` (e.g. '/api/ws/shell/mybox').
@@ -16,14 +51,23 @@ const BASE = `${import.meta.env.BASE_URL}api`;
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const m = window.location.pathname.match(/^(\/d\/[^/]+)(?:\/|$)/);
+  // Browsers can't set headers on WebSocket connections, so the token rides
+  // as a query parameter instead (absent behind the tunnel, which injects it).
+  const q = apiToken ? `${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(apiToken)}` : '';
   if (m) {
-    return `${proto}//${window.location.host}${m[1]}${path}`;
+    return `${proto}//${window.location.host}${m[1]}${path}${q}`;
   }
-  return `${proto}//${window.location.host}${path}`;
+  return `${proto}//${window.location.host}${path}${q}`;
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, options);
+  const resp = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { ...authHeaders(), ...(options?.headers ?? {}) },
+  });
+  if (resp.status === 401) {
+    throw new AuthError();
+  }
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`${resp.status}: ${text}`);
@@ -96,6 +140,10 @@ export async function getPackages(): Promise<Package[]> {
   return request<Package[]>('/packages');
 }
 
+export async function getHostStatus(): Promise<HostStatus> {
+  return request<HostStatus>('/host-status');
+}
+
 export async function streamSSE(
   url: string,
   body: unknown,
@@ -103,9 +151,12 @@ export async function streamSSE(
 ): Promise<void> {
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   });
+  if (resp.status === 401) {
+    throw new AuthError();
+  }
   const reader = resp.body!.getReader();
   const decoder = new TextDecoder();
   let buf = '';

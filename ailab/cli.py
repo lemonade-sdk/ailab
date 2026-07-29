@@ -8,13 +8,17 @@ from .container import (
     add_port,
     create_container,
     delete_container,
+    info_container,
     list_containers,
     list_ports,
     remove_port,
     run_container,
     stop_container,
+    tail_logs,
 )
+from .doctor import DoctorError
 from .installers import INSTALLERS, get_installer
+from .network import bracket_if_ipv6, dashboard_hosts
 
 
 # ── Subcommand handlers ────────────────────────────────────────────────────────
@@ -83,27 +87,116 @@ def cmd_install(args):
     installer.install(args.name)
 
 
+def cmd_info(args):
+    info_container(args.name)
+
+
+def cmd_logs(args):
+    tail_logs(args.name, follow=args.follow, lines=args.lines)
+
+
+def cmd_doctor(args):
+    from . import doctor
+
+    checks = doctor.run_checks()
+    print("AI Lab environment check:\n")
+    print(doctor.format_checks(checks))
+    print()
+    if any(c.status == doctor.FAIL for c in checks):
+        print("Some required checks failed — see the remedies above.")
+        sys.exit(1)
+    if any(c.status == doctor.WARN for c in checks):
+        print("Required checks passed. Some optional services are unavailable (see above).")
+    else:
+        print("Everything looks good.")
+
+
 def cmd_packages(args):
-    print(f"{'PACKAGE':<20} DESCRIPTION")
-    print("-" * 70)
+    from . import appstore
+
+    catalog = appstore.get_catalog()
+    snaps = appstore.get_snaps(catalog)
+
+    print(f"{'PACKAGE':<16} {'PORTS':<16} DESCRIPTION")
+    print("-" * 78)
+    if snaps:
+        for snap in sorted(snaps, key=lambda s: s["name"]):
+            ports = ",".join(str(p) for p in appstore.get_ports(snap)) or "-"
+            desc = snap.get("summary") or snap.get("title") or ""
+            print(f"{snap['name']:<16} {ports:<16} {desc}")
+        return
+
+    # Catalog unreachable — fall back to the built-in table.
     for name, cls in sorted(INSTALLERS.items()):
-        inst = cls()
-        print(f"{name:<20} {inst.description}")
+        print(f"{name:<16} {'-':<16} {cls().description}")
+    print()
+    print("(could not reach the app catalog; showing the built-in list)")
 
 
 def cmd_web(args):
+    import os
+
     import uvicorn
-    from .web.app import app
-    # Wildcard bind addresses aren't valid URLs to click on, so show a
-    # browser-friendly host instead.  IPv6 literals need bracket-wrapping.
-    if args.host in ("::", "0.0.0.0", ""):
-        display_host = "localhost"
-    elif ":" in args.host:
-        display_host = f"[{args.host}]"
+
+    # Let the app (and the cloud tunnel client) know its own port and host
+    # for dashboard-URL logging and tunnel auth injection.
+    os.environ["AILAB_WEB_PORT"] = str(args.port)
+    os.environ["AILAB_WEB_HOST"] = args.host
+
+    try:
+        from .web.app import API_TOKEN, app
+    except PermissionError:
+        from .web.auth import token_file_path
+
+        print(f"Error: permission denied writing the web API token at {token_file_path()}.")
+        print()
+        if os.environ.get("SNAP"):
+            print("Under the snap, the web interface already runs as a background")
+            print("service owned by root, so you don't need to (and can't) start it")
+            print("as yourself. Get its dashboard URL with:")
+            print()
+            print("  sudo ailab dashboard")
+            print()
+            print("To run `ailab web` directly instead of using the service, use sudo.")
+        else:
+            print(f"Check that you own (or can write to) {token_file_path()}.")
+        sys.exit(1)
+
+    from .web.auth import write_bind_host
+
+    write_bind_host(args.host)
+
+    # A wildcard bind isn't a valid URL to click on, and isn't reachable at
+    # only 'localhost' either — show every address we could find the host
+    # answers on.  IPv6 literals need bracket-wrapping.
+    hosts = [bracket_if_ipv6(h) for h in dashboard_hosts(args.host)]
+    print(f"Starting ailab web interface on port {args.port}")
+    print("Dashboard (with access token), reachable at:")
+    for h in hosts:
+        print(f"  http://{h}:{args.port}/#token={API_TOKEN}")
+    if args.reload:
+        # uvicorn's reloader needs an import string, not an app object.
+        uvicorn.run("ailab.web.app:app", host=args.host, port=args.port, reload=True)
     else:
-        display_host = args.host
-    print(f"Starting ailab web interface at http://{display_host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+        uvicorn.run(app, host=args.host, port=args.port)
+
+
+def cmd_dashboard(args):
+    from .web.auth import read_bind_host, read_token, token_file_path
+
+    token = read_token()
+    if not token:
+        print(f"No web API token found at {token_file_path()}.")
+        print("Either the web daemon has not started yet, or you cannot read the file.")
+        print("  Snap:     sudo ailab dashboard")
+        print("  Non-snap: ailab web   (generates the token on first start)")
+        sys.exit(1)
+    # The bind host is recorded by `ailab web` itself; older token files
+    # (written before this existed) won't have it, so fall back to the
+    # loopback-only assumption that was always correct before.
+    bind_host = read_bind_host() or "127.0.0.1"
+    for h in dashboard_hosts(bind_host):
+        print(f"http://{bracket_if_ipv6(h)}:{args.port}/#token={token}")
 
 
 def cmd_complete(args):
@@ -114,7 +207,8 @@ def cmd_complete(args):
 
     if args.kind == "commands":
         for name in ("new", "run", "stop", "list", "ls", "delete", "rm",
-                     "install", "packages", "pkgs", "port"):
+                     "install", "packages", "pkgs", "port", "web", "dashboard",
+                     "doctor", "info", "logs"):
             print(name)
         return
 
@@ -139,8 +233,11 @@ def cmd_port(args):
         except ValueError:
             print("Port numbers must be integers.")
             sys.exit(1)
+        if args.bind and args.inbound:
+            print("Error: --bind only applies to outbound proxies (host → container).")
+            sys.exit(1)
         direction = "inbound" if args.inbound else "outbound"
-        add_port(args.name, host_port, container_port, direction)
+        add_port(args.name, host_port, container_port, direction, bind_host=args.bind or "127.0.0.1")
 
     elif args.port_command == "remove":
         try:
@@ -157,10 +254,22 @@ def cmd_port(args):
 
 # ── Parser ────────────────────────────────────────────────────────────────────
 
+class AilabArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser with a friendlier message for unknown subcommands."""
+
+    def error(self, message):
+        if message.startswith("argument COMMAND: invalid choice:"):
+            bad = message.split("'")[1]
+            self.print_usage(sys.stderr)
+            sys.stderr.write(f"ailab: '{bad}' is not an ailab command. See 'ailab help'.\n")
+            sys.exit(2)
+        super().error(message)
+
+
 def build_parser():
     available_pkgs = ", ".join(sorted(INSTALLERS))
 
-    parser = argparse.ArgumentParser(
+    parser = AilabArgumentParser(
         prog="ailab",
         description=(
             "Manage LXD-based AI development sandboxes.\n\n"
@@ -170,9 +279,12 @@ def build_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
+  ailab doctor                 Check your environment is ready
   ailab new mybox              Create a new sandbox named 'mybox'
   ailab install mybox openclaw Install openclaw (local-AI configured)
   ailab run mybox              Open a shell in 'mybox'
+  ailab info mybox             Show status, ports, and installed tools
+  ailab logs mybox -f          Follow the container's logs
   ailab stop mybox             Stop a running sandbox
   ailab list                   List all sandboxes
   ailab delete mybox           Delete a sandbox
@@ -192,9 +304,8 @@ examples:
         description=(
             "Create a new LXD sandbox based on ubuntu:devel with:\n"
             "  • Your home directory mounted\n"
-            "  • lemonade-server (port 8000) and ollama (port 11434)\n"
+            "  • lemonade-server (port 8000 or 13305) and ollama (port 11434)\n"
             "    proxied so they appear local inside the container\n"
-            "  • Common web UI ports forwarded to your host browser\n"
             "  • python3-venv, pip, nodejs, npm, bun, homebrew pre-installed"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -232,6 +343,44 @@ examples:
     # ── list ───────────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List all sandboxes", aliases=["ls"])
     p_list.set_defaults(func=cmd_list)
+
+    # ── info ───────────────────────────────────────────────────────────────────
+    p_info = sub.add_parser(
+        "info",
+        help="Show details about a sandbox",
+        description=(
+            "Show a sandbox's status, IP address, mapped user, config dir,\n"
+            "forwarded ports, and installed packages (when running)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_info.add_argument("name", help="Sandbox name")
+    p_info.set_defaults(func=cmd_info)
+
+    # ── logs ───────────────────────────────────────────────────────────────────
+    p_logs = sub.add_parser("logs", help="Show a sandbox's system logs")
+    p_logs.add_argument("name", help="Sandbox name")
+    p_logs.add_argument(
+        "--follow", "-f", action="store_true",
+        help="Follow the log output (Ctrl-C to stop)",
+    )
+    p_logs.add_argument(
+        "--lines", "-n", type=int, default=50,
+        help="Number of lines to show (default: 50)",
+    )
+    p_logs.set_defaults(func=cmd_logs)
+
+    # ── doctor ─────────────────────────────────────────────────────────────────
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="Check that your environment is set up correctly",
+        description=(
+            "Check LXD is installed, initialised, and reachable, and report\n"
+            "whether host AI services (lemonade-server, ollama) are available."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_doctor.set_defaults(func=cmd_doctor)
 
     # ── delete ─────────────────────────────────────────────────────────────────
     p_del = sub.add_parser("delete", help="Delete a sandbox", aliases=["rm"])
@@ -275,16 +424,41 @@ examples:
     )
     p_pkgs.set_defaults(func=cmd_packages)
 
-    p_complete = sub.add_parser("_complete", help=argparse.SUPPRESS)
+    # ── help ───────────────────────────────────────────────────────────────────
+    p_help = sub.add_parser("help", help="Show this help message")
+    p_help.set_defaults(func=lambda args: parser.print_help())
+
+    p_complete = sub.add_parser("_complete")
     p_complete.add_argument("kind", choices=["commands", "containers", "packages", "port-actions"])
     p_complete.set_defaults(func=cmd_complete)
 
     # ── web ────────────────────────────────────────────────────────────────────
     p_web = sub.add_parser("web", help="Start the ailab web management interface")
-    p_web.add_argument("--host", default="::", help="Host to bind to (default: :: — dual-stack IPv4+IPv6)")
+    p_web.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help=(
+            "Host to bind to (default: 127.0.0.1 — local only). "
+            "The API grants full container control to anyone who can reach it; "
+            "only bind wider (e.g. 0.0.0.0) on a trusted network."
+        ),
+    )
     p_web.add_argument("--port", "-p", type=int, default=11500, help="Port to listen on (default: 11500)")
     p_web.add_argument("--reload", action="store_true", help="Enable auto-reload (development)")
     p_web.set_defaults(func=cmd_web)
+
+    # ── dashboard ──────────────────────────────────────────────────────────────
+    p_dash = sub.add_parser(
+        "dashboard",
+        help="Print the tokenized web dashboard URL",
+        description=(
+            "Print the local dashboard URL including the API access token.\n"
+            "Under the snap the token file is root-owned: use sudo ailab dashboard."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_dash.add_argument("--port", "-p", type=int, default=11500, help="Web interface port (default: 11500)")
+    p_dash.set_defaults(func=cmd_dashboard)
 
     # ── port ───────────────────────────────────────────────────────────────────
     p_port = sub.add_parser("port", help="Manage port proxies for a sandbox")
@@ -315,6 +489,16 @@ examples:
         action="store_true",
         help="Proxy container→host instead of host→container",
     )
+    p_port_add.add_argument(
+        "--bind",
+        metavar="ADDRESS",
+        help=(
+            "Host address the outbound proxy listens on (default: 127.0.0.1, "
+            "loopback only). Use 0.0.0.0 or a specific public IP to make the "
+            "container's service reachable from other machines — only do this "
+            "on a trusted network. Outbound proxies only."
+        ),
+    )
     p_port_add.set_defaults(func=cmd_port, port_command="add")
 
     # port remove
@@ -335,7 +519,11 @@ examples:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except DoctorError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

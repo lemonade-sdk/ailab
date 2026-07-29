@@ -16,12 +16,19 @@ export interface PortProxy {
 export interface Package {
   name: string;
   description: string;
+  ports: number[];
 }
 
 export interface SystemUser {
   username: string;
   uid: number;
   home: string;
+}
+
+export interface HostStatus {
+  lemonade: { reachable: boolean; port: number | null };
+  ollama: { reachable: boolean };
+  cloud: { configured: boolean; connected: boolean; host?: string; device?: string };
 }
 
 export type SSEEvent =

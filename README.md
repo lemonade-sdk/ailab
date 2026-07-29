@@ -4,13 +4,15 @@ Run AI tools safely on Ubuntu — no technical experience required.
 
 AI Lab creates lightweight [LXD](https://ubuntu.com/lxd) containers that are
 pre-wired to use AI services running on your host's lemonade-server.
-Each container shares your home directory, so your files are always accessible,
-while keeping installed software isolated from the rest of your system.
+Each container gets its own isolated home directory (visible on the host under
+`~/ailab/<name>`), keeping both the software an agent installs and the files it
+touches separate from the rest of your system.
 
 ## Features
 
 - **Safe by default** — AI tools run in isolated containers, not on your host system
-- **Your files, always accessible** — home directory is shared into every container
+- **Isolated workspaces** — each container gets its own home directory,
+  accessible from the host at `~/ailab/<name>`; your real home is not exposed
 - **Local AI, zero config** — lemonade-server and ollama are automatically available
   inside containers on `localhost`, proxied from the host
 - **One command, fully configured** — `ailab new mybox --install openclaw` creates
@@ -38,6 +40,16 @@ sudo snap install ailab
 sudo snap connect ailab:lxd lxd:lxd
 ```
 
+Confirm everything is wired up correctly:
+
+```bash
+ailab doctor
+```
+
+It checks that LXD is installed, initialised, and reachable, and reports
+whether lemonade-server and ollama are available — with a remedy for anything
+that's missing.
+
 The web management interface runs as a daemon automatically after install.
 Configure the host and port with snap settings:
 
@@ -46,7 +58,16 @@ snap set ailab web.host=127.0.0.1   # default: 127.0.0.1
 snap set ailab web.port=11500        # default: 11500
 ```
 
-Then open `http://127.0.0.1:11500` in your browser.
+The dashboard requires an access token (it controls containers and provides
+interactive shells, so it is not left open to any local page or process).
+Get a ready-to-open URL with:
+
+```bash
+sudo ailab dashboard
+```
+
+and open the printed `http://127.0.0.1:11500/#token=…` link in your browser.
+The browser remembers the token, so this is only needed once per machine.
 
 ### From the PPA
 
@@ -110,7 +131,6 @@ Create a new sandbox container. This:
 - Sets up proxy devices so `localhost:8000` / `localhost:13305` (lemonade)
   and `localhost:11434` (ollama) inside the container reach the corresponding
   services on your host
-- Forwards common web UI ports to your host browser
 - Pre-installs: python3, pip, nodejs, npm, bun, homebrew
 
 ```bash
@@ -193,12 +213,37 @@ creating, starting, stopping, and deleting containers. Includes:
 
 ```bash
 ailab web                    # binds to 127.0.0.1:11500
-ailab web --host 0.0.0.0    # expose on the local network
+ailab web --host 0.0.0.0    # expose on the local network (trusted networks only)
 ailab web --port 9000        # use a different port
 ailab web --reload           # auto-reload on code changes (development)
 ```
 
-Then open `http://127.0.0.1:11500` in your browser.
+Every `/api` route — including the shell and log WebSockets — requires a
+bearer token, generated on first start and stored under the snap's data
+directory (or `~/.local/share/ailab/web-token` for non-snap installs).
+`ailab web` prints the tokenized dashboard URL at startup, and you can
+retrieve it any time with:
+
+```bash
+ailab dashboard          # sudo ailab dashboard under the snap
+```
+
+Open the printed `http://127.0.0.1:11500/#token=…` URL; the frontend stores
+the token in the browser and strips it from the address bar. Cloud-tunnel
+access is unaffected: the hub authenticates you with GitHub OAuth and the
+tunnel client presents the local token on your behalf.
+
+Bound to `0.0.0.0` (or any wildcard address), both `ailab web` and
+`ailab dashboard` print one tokenized link per address the dashboard is
+actually reachable on — `localhost` plus every LAN/public IP ailab could
+discover on the host — instead of just `localhost`, which wouldn't work from
+another machine:
+
+```
+$ sudo ailab dashboard
+http://localhost:11500/#token=…
+http://192.168.1.50:11500/#token=…
+```
 
 ### `ailab port`
 
@@ -221,19 +266,50 @@ ailab port list mybox
 ailab port remove mybox 9000
 ```
 
+By default, outbound proxies (host → container, the kind used for web UIs)
+listen on `127.0.0.1` only — including the ones `ailab install` sets up
+automatically for a package's own web UI (e.g. picoclaw on port 18800). To
+reach one from another machine, widen it with `--bind`; if a proxy is already
+forwarding that port, this updates it in place rather than erroring out:
+
+```bash
+# Reachable from any interface on the host
+ailab port add mybox 18800 --bind 0.0.0.0
+
+# Reachable only from a specific address (e.g. the host's public IP)
+ailab port add mybox 18800 --bind 203.0.113.10
+
+# Narrow it back to loopback-only
+ailab port remove mybox 18800
+```
+
+Only do this on a network you trust — it makes the container's service
+reachable to anyone who can reach that address, with none of the
+token-based auth the web dashboard has.
+
 ## Installable Packages
+
+Packages install as classic-confinement snaps from the
+[nimbus-app-store](https://github.com/kenvandine/nimbus-app-store) catalog —
+the same catalog the [Nimbus](https://github.com/kenvandine/nimbus-appliance)
+appliance uses. `ailab install` fetches the catalog live, `snap install`s the
+package, forwards the ports it declares, and runs its onboarding/post-install
+steps.
 
 | Package | Status | Description |
 |---------|--------|-------------|
 | `openclaw` | Supported | AI coding agent with local-first LLM support. Web UI at `http://127.0.0.1:18789`. |
-| `nullclaw` | Experimental (CLI only) | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://127.0.0.1:3000`. |
-| `picoclaw` | Experimental (CLI only) | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://127.0.0.1:18800`. |
+| `nullclaw` | Experimental | Lightweight static-binary AI agent gateway (Zig-built). Web UI at `http://127.0.0.1:3002`. |
+| `picoclaw` | Supported | Ultra-lightweight Go-based AI agent gateway (30+ providers). Web UI at `http://127.0.0.1:18800`. |
+| `hermes-agent` | Experimental | Autonomous AI agent, 60+ built-in tools, 20+ platform integrations. Web UI at `http://127.0.0.1:9119`. |
+| `odysseus` | Experimental | Self-hosted AI workspace (chat, documents, research). Web UI at `http://127.0.0.1:7000`. |
+| `zeroclaw` | Experimental | Zero-config autonomous AI agent. Web UI at `http://127.0.0.1:3000`. |
 
-All packages use lemonade-server as the primary provider via its
-OpenAI-compatible API, with cloud providers disabled. lemonade-server is
-auto-detected on `localhost:13305` (>= 10.1) or `localhost:8000` (< 10.1).
-`nullclaw` and `picoclaw` also configure ollama on `localhost:11434` as a
-secondary provider.
+Every package uses lemonade-server as its primary provider via its
+OpenAI-compatible API, auto-detected on `localhost:13305` (>= 10.1) or
+`localhost:8000` (< 10.1), and most also configure ollama on
+`localhost:11434` as a secondary provider — each snap's own onboarding tool
+(`<package>.lemonade --auto`) handles this during install.
 
 ## How It Works
 
@@ -241,18 +317,15 @@ secondary provider.
 Your Host
 ├── lemonade-server :13305 (>= 10.1) or :8000 (< 10.1)
 ├── ollama          :11434
-└── ailab container (LXD)
+└── ailab container (LXD, privileged — required for classic snap confinement)
     ├── localhost:13305  →  host:13305  (lemonade >= 10.1, inbound proxy)
     ├── localhost:8000   →  host:8000   (lemonade < 10.1,  inbound proxy)
-    ├── localhost:11434  →  host:11434  (ollama, inbound proxy)
-    ├── host:7860        →  container:7860   (gradio)
-    ├── host:8888        →  container:8888   (jupyter)
-    ├── host:8501        →  container:8501   (streamlit)
-    └── host:9090        →  container:9090
+    └── localhost:11434  →  host:11434  (ollama, inbound proxy)
 ```
 
-Tool-specific ports (e.g. nullclaw :3000, openclaw :18789) are added when
-the package is installed, not at container creation time.
+Package-specific ports (e.g. openclaw :18789) come from that package's entry
+in the nimbus-app-store catalog and are forwarded when the package is
+installed, not at container creation time.
 
 **LXD REST API**: All container operations use the LXD REST API via `pylxd`,
 not the `lxc` CLI. Container setup runs via cloud-init at creation time,
@@ -262,33 +335,83 @@ so no restart is needed and configuration is applied atomically.
 keeping them separate from any other LXD containers on your system. You can
 see them with `lxc --project ailab list`.
 
-**Home directory**: Your host home directory is bind-mounted into the container
-at the same path using `raw.idmap` for correct UID/GID passthrough. Files you
-create inside the container appear on your host and vice versa.
+**Home directory**: Each container gets an isolated home directory —
+`~/ailab/<name>` on the host (or under the snap's data directory for snap
+installs) — bind-mounted at your home path inside the container using
+`raw.idmap` for correct UID/GID passthrough. The container sees only this
+directory, not your real home; files you create inside it appear on the host
+under `~/ailab/<name>` and vice versa.
 
 **Per-container config**: Each container has an isolated home directory, so
 tool configs (e.g. `~/.openclaw/openclaw.json`) are automatically per-container.
 You can have two containers running the same tool with different configurations.
 
-**Security nesting**: Containers are created with `security.nesting=true`,
-which enables docker, fuse, and other tools that need kernel features inside
-the container.
+**Privileged + nesting**: Containers are created with `security.nesting=true`
+(docker, fuse, and other tools that need kernel features inside the
+container) and `security.privileged=true` plus syscall interception for
+`mknod`/`setxattr`. The latter are required for `snap install --classic` to
+work inside the container — classic-confinement snaps rely on bind-mount
+tricks that only a privileged container can perform. Containers created
+before this was added need to be recreated (`ailab delete` + `ailab new`)
+before packages can be installed.
 
-## Default Outbound Ports
+## Security model
 
-These ports are forwarded from every new container to your host by default:
+AI Lab's goal is to keep AI tools — and whatever they install or download —
+off your host system and out of your real home directory. It is **not** a
+hard security sandbox for running actively malicious code. Understand these
+boundaries before pointing an autonomous agent at anything sensitive.
 
-| Port | Common Use |
-|------|-----------|
-| 7860 | Gradio |
-| 8888 | Jupyter |
-| 8501 | Streamlit |
-| 9090 | Prometheus, general |
+**What AI Lab protects**
 
-Additional ports are forwarded when specific packages are installed:
-- nullclaw: 3000
-- openclaw: 18789
-- picoclaw: 18800
+- **Your host packages and system.** Tools install *inside* the container
+  (snaps, npm, pip, brew), never on your host.
+- **Your real home directory.** Each container only sees its own isolated
+  home (`~/ailab/<name>` on the host), not the rest of `~`. A tool that
+  `rm -rf`s its home only affects that one container's directory.
+- **Other containers.** Each has its own home and config, and all live in a
+  dedicated `ailab` LXD project separate from your other LXD instances.
+- **The management API.** Every `/api` route, including the interactive shell
+  and log WebSockets, requires the bearer token from `ailab dashboard`. The
+  web daemon binds `127.0.0.1` by default, and cross-origin browser pages are
+  rejected even if they somehow obtain the token.
+
+**What AI Lab does *not* protect against**
+
+- **Container escape.** ailab containers run **privileged**
+  (`security.privileged=true`), which is *required* for classic-confinement
+  snaps like openclaw to install. Privileged container root is effectively
+  host root: a determined attacker who gains root inside the container may be
+  able to escape to the host. Treat the container as a convenience/tidiness
+  boundary, not a VM-grade trust boundary. Do not run code you actively
+  distrust and expect the host to be safe.
+- **Your files, if you widen the mount.** Only `~/ailab/<name>` is exposed by
+  default; anything you additionally bind-mount or forward is on you.
+- **Anyone who can reach a widened bind.** `ailab web --host 0.0.0.0` (or
+  `snap set ailab web.host=0.0.0.0`) exposes the token-protected API to the
+  network — only do this on a trusted network.
+- **Supply chain.** Container provisioning and package onboarding fetch and
+  run scripts from the network (Node.js, bun, Homebrew, the nimbus-app-store
+  catalog). These run inside the container, but they are not pinned or
+  checksum-verified.
+
+**Access notes**
+
+- The web daemon runs as **root** under the snap (it needs the LXD socket) and
+  stores its token `0600` under the snap's data directory; use
+  `sudo ailab dashboard` to read it.
+- Non-snap installs need your user in the `lxd` group; that group grants full
+  control of LXD, which is itself root-equivalent. `ailab doctor` checks this.
+
+## Outbound Ports
+
+ailab doesn't forward any ports by default at container-creation time.
+Package-specific ports come from that package's entry in the
+nimbus-app-store catalog and are forwarded automatically when you run
+`ailab install <name> <package>` — see the
+[Installable Packages](#installable-packages) table above for each
+package's port. You can forward additional ports yourself with
+`ailab port add`.
 
 When multiple containers are running, ailab automatically skips proxy devices
 whose host port is already bound, so containers can start without conflicts.
@@ -394,8 +517,10 @@ ailab new experiments --install openclaw
 **Persistence**: Containers persist between reboots. LXD starts them
 automatically. `ailab run` starts a stopped container before opening a shell.
 
-**Reinstalling a package**: Just re-run `ailab install`. Config directories
-are separate, so reinstalling updates the binary and rewrites config.
+**Reinstalling a package**: Just re-run `ailab install`. `snap install` is a
+no-op if the package is already installed (snapd's usual `snap refresh`
+handles picking up new versions), but the onboard command and post-install
+script both re-run, so it's an easy way to refresh a package's config.
 
 **LXD console**: You can also access containers directly:
 ```bash

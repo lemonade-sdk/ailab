@@ -1,7 +1,17 @@
 #!/bin/bash
-# Called by snapd whenever 'snap set ailab ...' is used.
+# Called by snapd on install/refresh and whenever 'snap set ailab ...' is used.
 # Validates web.host and web.port and restarts the web daemon.
 set -euo pipefail
+
+# The `ailab` CLI app runs as the invoking user (not the root `ailab.web`
+# daemon), but both share data under $SNAP_COMMON. That directory is
+# root:root 0755 by default, so a plain user's first `ailab new` would fail
+# to mkdir under it. Pre-create the two subdirectories the CLI writes into
+# and make them sticky + world-writable (like /tmp) so any local user can
+# create their own subdirectory, while the sticky bit stops them touching
+# each other's.
+mkdir -p "$SNAP_COMMON/homes" "$SNAP_COMMON/containers"
+chmod 1777 "$SNAP_COMMON/homes" "$SNAP_COMMON/containers"
 
 HOST=$(snapctl get web.host)
 PORT=$(snapctl get web.port)
@@ -19,6 +29,46 @@ else
         echo "web.port must be a number between 1 and 65535" >&2
         exit 1
     fi
+fi
+
+# ── Cloud tunnel settings ────────────────────────────────────────────────────
+# Validate here so a bad 'snap set' fails loudly instead of leaving the web
+# daemon crash-looping at startup.
+CLOUD_ENABLED=$(snapctl get cloud.enabled 2>/dev/null || true)
+if [ "${CLOUD_ENABLED:-false}" = "true" ]; then
+    CLOUD_HOST=$(snapctl get cloud.host 2>/dev/null || true)
+    CLOUD_TOKEN=$(snapctl get cloud.token 2>/dev/null || true)
+    CLOUD_USER=$(snapctl get cloud.user 2>/dev/null || true)
+
+    if [ -z "$CLOUD_HOST" ] || [ -z "$CLOUD_TOKEN" ]; then
+        echo "cloud.enabled=true requires cloud.host and cloud.token to be set" >&2
+        exit 1
+    fi
+    if [ -z "$CLOUD_USER" ]; then
+        echo "cloud.enabled=true requires cloud.user (your GitHub username)" >&2
+        exit 1
+    fi
+fi
+
+CLOUD_DEVICE=$(snapctl get cloud.device-id 2>/dev/null || true)
+if [ -n "$CLOUD_DEVICE" ]; then
+    if ! [[ "$CLOUD_DEVICE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+        echo "cloud.device-id must use only lowercase letters, digits, and hyphens (max 63 chars, no leading/trailing hyphen)" >&2
+        exit 1
+    fi
+fi
+
+CLOUD_PORTS=$(snapctl get cloud.ports 2>/dev/null || true)
+if [ -n "$CLOUD_PORTS" ]; then
+    IFS=',' read -ra PORT_LIST <<< "$CLOUD_PORTS"
+    for p in "${PORT_LIST[@]}"; do
+        p="${p//[[:space:]]/}"
+        [ -z "$p" ] && continue
+        if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+            echo "cloud.ports must be a comma-separated list of ports (1-65535); got '$p'" >&2
+            exit 1
+        fi
+    done
 fi
 
 # Restart the web daemon to pick up the new settings

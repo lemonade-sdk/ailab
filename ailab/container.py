@@ -1,6 +1,8 @@
 """LXD container management for ailab — via LXD REST API (pylxd)."""
 
 import asyncio
+import contextvars
+import json
 import os
 import pwd
 import shutil
@@ -11,11 +13,21 @@ import termios
 import textwrap
 import time
 import tty
+import warnings
 from pathlib import Path
 
 import aiohttp
 import pylxd
 import pylxd.exceptions
+
+# pylxd 2.4.x warns whenever a newer LXD returns a model field it doesn't
+# know about (e.g. Profile.project, Project.replica_mode). It's harmless but
+# spams every command that reads a profile/project; silence just that message.
+warnings.filterwarnings(
+    "ignore",
+    message=r"Attempted to set unknown attribute.*",
+    category=UserWarning,
+)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -202,14 +214,15 @@ def _wait_for_ready(cname: str, timeout: int = 30):
 
 
 def _host_port_in_use(port: int) -> bool:
-    """Return True if a TCP port is already bound on the host."""
+    """Return True if something is listening on a host TCP port.
+
+    Uses connect() rather than bind(): under strict snap confinement the CLI
+    app has the ``network`` plug but not ``network-bind``, so a bind() probe
+    would be denied and every port would look "in use".
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            s.bind(("127.0.0.1", port))
-            return False
-        except OSError:
-            return True
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def _partition_conflicting_proxies(
@@ -311,18 +324,51 @@ def container_config_dir(name: str, home: str) -> Path:
     return _container_home_dir(home, name)
 
 
+def _ensure_writable_user_dir(path: Path):
+    """Make a per-user SNAP_COMMON subdirectory (homes/<user>, containers/<user>)
+    writable by both the root ailab.web daemon and the non-root ailab CLI.
+
+    Under strict snap confinement, ailab.web runs as UID 0 but is denied
+    CAP_DAC_OVERRIDE, so it's still bound by normal DAC permission bits like
+    any other process. Whichever of the two apps creates this directory
+    first (via mkdir's default mode) leaves it writable only by itself and
+    its group — the other one then gets a plain PermissionError creating a
+    container. No-op outside snap mode, where both run as the same user.
+
+    Sets the sticky bit (mode 1777, like /tmp) rather than plain 777: both
+    ailab.web and the CLI still need to create entries here regardless of
+    which local user owns them, but sticky prevents one local user from
+    deleting or renaming another's homes/<user> or containers/<user> entry.
+    """
+    if not os.environ.get("SNAP_COMMON"):
+        return
+    try:
+        path.chmod(0o1777)
+    except OSError:
+        pass
+
+
 def build_shell_welcome(container_name: str) -> str:
     """Build a contextual SHELL_WELCOME message based on installed tools."""
     cname = _container_name(container_name)
     _, _, _, home = get_container_user(cname)
-    # Token lives in the host-side config dir (created by the installer with
-    # host ownership), not inside the container's subuid-owned home.
-    token_file = container_config_dir(container_name, home) / "openclaw" / "gateway-token"
+    # Token lives in openclaw.json inside the container (written by the
+    # nimbus-app-store post-install script), read via the LXD file API so
+    # subuid ownership inside the container doesn't matter.
+    openclaw_config = None
+    try:
+        openclaw_config = pull_file(cname, f"{home}/.openclaw/openclaw.json")
+    except Exception:
+        pass
 
     lines = ["Welcome to your AI Lab container!\n"]
 
-    if token_file.exists():
-        gateway_token = token_file.read_text().strip() or None
+    if openclaw_config is not None:
+        gateway_token = None
+        try:
+            gateway_token = json.loads(openclaw_config).get("gateway", {}).get("auth", {}).get("token")
+        except (json.JSONDecodeError, AttributeError):
+            pass
 
         if gateway_token:
             lines += [
@@ -345,7 +391,7 @@ def build_shell_welcome(container_name: str) -> str:
         lines += [
             "No AI tools are installed yet.",
             "From the host, install a tool into this container:",
-            "  ailab install openclaw " + container_name,
+            f"  ailab install {container_name} openclaw",
         ]
 
     return "\n".join(lines)
@@ -388,6 +434,17 @@ def set_container_env(cname: str, env: dict[str, str], profile_name: str | None 
 
 # ── Public exec API (used by installers) ─────────────────────────────────────
 
+def _context_bound(fn):
+    """Return fn bound to the caller's contextvars context.
+
+    pylxd invokes stream handlers from its own websocket threads, which do
+    not inherit contextvars; binding them keeps context-aware output routing
+    (e.g. the web UI's per-operation SSE log capture) working.
+    """
+    ctx = contextvars.copy_context()
+    return lambda *a, **k: ctx.run(fn, *a, **k)
+
+
 def container_exec(
     cname: str,
     cmd: list[str],
@@ -419,8 +476,10 @@ def container_exec(
     if stdin is not None:
         kwargs["stdin_payload"] = stdin.encode() if isinstance(stdin, str) else stdin
     if stream:
-        kwargs["stdout_handler"] = lambda s: print(s, end="", flush=True)
-        kwargs["stderr_handler"] = lambda s: print(s, end="", file=sys.stderr, flush=True)
+        kwargs["stdout_handler"] = _context_bound(lambda s: print(s, end="", flush=True))
+        kwargs["stderr_handler"] = _context_bound(
+            lambda s: print(s, end="", file=sys.stderr, flush=True)
+        )
 
     result = instance.execute(cmd, **kwargs)
 
@@ -896,7 +955,12 @@ def ensure_ailab_project():
             config={"features.images": "false"},
         )
 
-    profile_config = {"security.nesting": "true"}
+    profile_config = {
+        "security.nesting": "true",
+        "security.privileged": "true",
+        "security.syscalls.intercept.mknod": "true",
+        "security.syscalls.intercept.setxattr": "true",
+    }
     devices = _default_profile_devices()
 
     try:
@@ -927,6 +991,12 @@ def create_container(
     username: the host user to map into the container; defaults to the
               current user.  Useful when the server runs as root (e.g. snap).
     """
+    # Surface setup problems (LXD missing/uninitialised, interface not
+    # connected, user not in the lxd group) as a friendly message before we
+    # start touching the LXD API.  Imported lazily to avoid a circular import.
+    from .doctor import preflight
+    preflight()
+
     cname = _container_name(name)
     if username:
         username, uid, gid, home = _user_info(username)
@@ -946,11 +1016,13 @@ def create_container(
     container_home = _container_home_dir(home, name)
     container_home.mkdir(parents=True, exist_ok=True)
     _chown(container_home, uid, gid)
+    _ensure_writable_user_dir(container_home.parent)
 
     # Pre-create config dir on host (accessible in container via bind mount)
     cfg_dir = container_config_dir(name, home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     _chown(cfg_dir, uid, gid)
+    _ensure_writable_user_dir(cfg_dir.parent)
 
     # ── Build devices dict ────────────────────────────────────────────────────
     devices: dict[str, dict] = {}
@@ -1032,6 +1104,12 @@ def create_container(
         "config": {
             "raw.idmap": idmap,
             "security.nesting": "true",
+            # Classic-confinement snaps (openclaw, nullclaw, picoclaw, etc.)
+            # need snap-confine's bind-mount tricks, which only work in a
+            # privileged container. Matches nimbus's container profile.
+            "security.privileged": "true",
+            "security.syscalls.intercept.mknod": "true",
+            "security.syscalls.intercept.setxattr": "true",
             "user.user-data": _cloud_init_userdata(username, uid, gid, home),
             "environment.AILAB_CONFIG_DIR": str(cfg_dir),
             "user.ailab-mapped-user": username,
@@ -1043,18 +1121,24 @@ def create_container(
     print(f"Creating container '{cname}' from {BASE_IMAGE_ALIAS} ({BASE_IMAGE_SERVER})...")
     client = _client()
 
-    # Remove any proxy devices that conflict with in-use ports (best-effort)
-    safe_devices = {}
-    for dev_name, dev_cfg in devices.items():
-        if dev_cfg.get("type") == "proxy" and dev_cfg.get("bind") == "host":
-            safe_devices[dev_name] = dev_cfg
-        else:
-            safe_devices[dev_name] = dev_cfg
+    # Leave out outbound proxy devices whose host port is already in use so
+    # the container can still start; they are added back to the config after
+    # startup so they activate once the port is freed (mirrors start_container).
+    conflicting, safe_devices = _partition_conflicting_proxies(devices)
+    if conflicting:
+        names = ", ".join(sorted(conflicting))
+        print(f"Warning: host ports already in use — deferring proxy device(s): {names}")
     config["devices"] = safe_devices
 
     instance = client.instances.create(config, wait=True)
     print(f"Starting container '{cname}'...")
     instance.start(wait=True)
+
+    if conflicting:
+        # Persist the deferred proxies so they work once the port is free.
+        instance = _get_instance(cname)
+        instance.devices = {**instance.devices, **conflicting}
+        instance.save(wait=True)
 
     print("Waiting for network...")
     _wait_for_network(cname)
@@ -1064,8 +1148,10 @@ def create_container(
     instance = _get_instance(cname)
     instance.execute(
         ["cloud-init", "status", "--wait"],
-        stdout_handler=lambda s: print(s, end="", flush=True),
-        stderr_handler=lambda s: print(s, end="", file=sys.stderr, flush=True),
+        stdout_handler=_context_bound(lambda s: print(s, end="", flush=True)),
+        stderr_handler=_context_bound(
+            lambda s: print(s, end="", file=sys.stderr, flush=True)
+        ),
     )
     # Verify cloud-init did not error
     rc, out, _ = container_exec(cname, ["cloud-init", "status"], check=False)
@@ -1082,6 +1168,11 @@ def create_container(
             print(log_out)
             print("---")
 
+    # Wait for snapd to finish seeding so the first `snap install` a package
+    # installer runs doesn't race snapd's own startup. Best-effort: older
+    # images or a slow first boot shouldn't fail container creation.
+    container_exec(cname, ["snap", "wait", "system", "seed.loaded"], check=False)
+
     # Write the AILAB_CONFIG_DIR profile.d snippet (config env is already set above)
     _get_instance(cname).files.put(
         "/etc/profile.d/ailab-base.sh",
@@ -1095,11 +1186,54 @@ def create_container(
 
 # ── Port management ───────────────────────────────────────────────────────────
 
-def add_port(name: str, host_port: int, container_port: int, direction: str = "outbound"):
+def _find_outbound_proxy_device(instance, host_port: int) -> str | None:
+    """Return the name of an existing outbound proxy device listening on
+    host_port (whether ailab created it for a custom port or as part of a
+    package install), or None if the port isn't proxied yet."""
+    for dev_name, cfg in instance.expanded_devices.items():
+        if cfg.get("type") != "proxy" or cfg.get("bind", "host") != "host":
+            continue
+        if cfg.get("listen", "").rsplit(":", 1)[-1] == str(host_port):
+            return dev_name if dev_name in instance.devices else None
+    return None
+
+
+def _find_inbound_proxy_device(instance, port: int) -> str | None:
+    """Return the name of an existing inbound proxy device (container →
+    host) whose container-side listen port or host-side connect port
+    matches `port`, or None if not found.
+
+    add_port() names a custom inbound device after its container-side
+    port (proxy-in-custom-{container_port}), but the CLI's `port remove`
+    only takes a single port number without saying which side it means —
+    matching against both sides avoids reconstructing (and getting wrong)
+    a device name when host_port and container_port differ.
+    """
+    for dev_name, cfg in instance.expanded_devices.items():
+        if cfg.get("type") != "proxy" or cfg.get("bind") != "container":
+            continue
+        listen_port = cfg.get("listen", "").rsplit(":", 1)[-1]
+        connect_port = cfg.get("connect", "").rsplit(":", 1)[-1]
+        if str(port) in (listen_port, connect_port):
+            return dev_name if dev_name in instance.devices else None
+    return None
+
+
+def add_port(
+    name: str,
+    host_port: int,
+    container_port: int,
+    direction: str = "outbound",
+    bind_host: str = "127.0.0.1",
+):
     """Add a port proxy to a container.
 
     direction: 'outbound' (host → container, for web UIs)
                'inbound'  (container → host, for host services)
+    bind_host: host-side address the outbound proxy listens on. Defaults to
+               127.0.0.1 (loopback only); pass '0.0.0.0' or a specific
+               address to make the container's service reachable from
+               other machines. Ignored for inbound proxies.
     """
     cname = _container_name(name)
     if _container_status(cname) == "missing":
@@ -1107,15 +1241,29 @@ def add_port(name: str, host_port: int, container_port: int, direction: str = "o
         sys.exit(1)
 
     if direction == "outbound":
-        dev_name = f"proxy-out-custom-{host_port}"
-        ok = add_proxy_device(cname, dev_name,
-                               f"tcp:127.0.0.1:{host_port}",
-                               f"tcp:127.0.0.1:{container_port}",
-                               bind="host")
-        if not ok:
-            print(f"Error: port {host_port} is already in use on the host.")
-            sys.exit(1)
-        print(f"Added outbound proxy: host:{host_port} → container:{container_port}")
+        instance = _get_instance(cname)
+        new_listen = f"tcp:{bind_host}:{host_port}"
+        new_connect = f"tcp:127.0.0.1:{container_port}"
+        existing = _find_outbound_proxy_device(instance, host_port)
+        if existing:
+            cfg = instance.devices[existing]
+            if cfg.get("listen") == new_listen and cfg.get("connect") == new_connect:
+                print(f"Outbound proxy already listening on {bind_host}:{host_port} → container:{container_port}.")
+            else:
+                instance.devices[existing]["listen"] = new_listen
+                instance.devices[existing]["connect"] = new_connect
+                instance.save(wait=True)
+                print(f"Updated existing proxy '{existing}': now {bind_host}:{host_port} → container:{container_port}")
+        else:
+            dev_name = f"proxy-out-custom-{host_port}"
+            ok = add_proxy_device(cname, dev_name, new_listen, new_connect, bind="host")
+            if not ok:
+                print(f"Error: port {host_port} is already in use on the host.")
+                sys.exit(1)
+            print(f"Added outbound proxy: {bind_host}:{host_port} → container:{container_port}")
+        if bind_host not in ("127.0.0.1", "localhost", "::1"):
+            print(f"Warning: listening on {bind_host} exposes this service to "
+                  "anyone who can reach that address — only do this on a trusted network.")
     else:
         dev_name = f"proxy-in-custom-{container_port}"
         add_proxy_device(cname, dev_name,
@@ -1126,16 +1274,37 @@ def add_port(name: str, host_port: int, container_port: int, direction: str = "o
 
 
 def remove_port(name: str, host_port: int, direction: str = "outbound"):
-    """Remove a custom port proxy from a container."""
+    """Remove a custom port proxy, or narrow a widened outbound proxy back to loopback."""
     cname = _container_name(name)
     if _container_status(cname) == "missing":
         print(f"Container '{name}' not found.")
         sys.exit(1)
 
-    dev_name = (f"proxy-out-custom-{host_port}" if direction == "outbound"
-                else f"proxy-in-custom-{host_port}")
-    remove_proxy_device(cname, dev_name)
-    print(f"Removed proxy device '{dev_name}'")
+    if direction == "outbound":
+        instance = _get_instance(cname)
+        existing = _find_outbound_proxy_device(instance, host_port)
+        if not existing:
+            print(f"No outbound proxy found on host port {host_port}.")
+            return
+        if existing.startswith("proxy-out-custom-"):
+            remove_proxy_device(cname, existing)
+            print(f"Removed proxy device '{existing}'")
+        else:
+            # A package-installed proxy (e.g. from `ailab install`) — narrow
+            # its bind back to loopback rather than deleting it outright,
+            # since that would drop the package's own port forwarding.
+            container_port = instance.devices[existing].get("connect", "").rsplit(":", 1)[-1]
+            instance.devices[existing]["listen"] = f"tcp:127.0.0.1:{host_port}"
+            instance.save(wait=True)
+            print(f"Narrowed '{existing}' back to 127.0.0.1:{host_port} → container:{container_port}")
+    else:
+        instance = _get_instance(cname)
+        existing = _find_inbound_proxy_device(instance, host_port)
+        if not existing:
+            print(f"No inbound proxy found on port {host_port}.")
+            return
+        remove_proxy_device(cname, existing)
+        print(f"Removed proxy device '{existing}'")
 
 
 def list_ports(name: str):
@@ -1241,7 +1410,9 @@ def list_containers():
     client = _client()
     # instances.all() has a project-scoping bug in pylxd 2.4.x that appends
     # '?project=...' to instance names; use the raw API instead.
-    resp = client.api.instances.get(params={"recursion": "1"})
+    # recursion=2 includes live state (IP addresses) in one round-trip
+    # instead of one state request per container.
+    resp = client.api.instances.get(params={"recursion": "2"})
     containers = resp.json().get("metadata", [])
 
     if not containers:
@@ -1256,16 +1427,14 @@ def list_containers():
         status = c.get("status", "unknown")
         ipv4 = ""
 
-        # Fetch live state for IP address
-        try:
-            state = client.instances.get(cname).state()
-            for iface in (state.network or {}).values():
-                for addr in iface.get("addresses", []):
-                    if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                        ipv4 = addr["address"]
-                        break
-        except Exception:
-            pass
+        network = (c.get("state") or {}).get("network") or {}
+        for iface in network.values():
+            for addr in iface.get("addresses", []):
+                if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                    ipv4 = addr["address"]
+                    break
+            if ipv4:
+                break
 
         devices = c.get("expanded_devices", {})
         ports = [
@@ -1276,6 +1445,115 @@ def list_containers():
         ]
         ports_str = ",".join(sorted(ports, key=int)) if ports else "-"
         print(f"{cname:<25} {status:<12} {ipv4:<18} {ports_str}")
+
+
+def _port_sort_key(p: str):
+    """Sort proxy ports numerically, keeping any non-numeric ones last."""
+    try:
+        return (0, int(p))
+    except ValueError:
+        return (1, p)
+
+
+def _instance_ipv4(instance) -> str:
+    """Return the first non-loopback IPv4 for a running instance, or ''."""
+    try:
+        for iface in (instance.state().network or {}).values():
+            for addr in iface.get("addresses", []):
+                if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                    return addr["address"]
+    except Exception:
+        pass
+    return ""
+
+
+def _installed_catalog_apps(cname: str) -> list[str]:
+    """Return catalog app ids whose snap is installed in a running container."""
+    from . import appstore
+    catalog = appstore.get_catalog()
+    by_store_name = {
+        appstore.get_store_name(s): s["name"] for s in appstore.get_snaps(catalog)
+    }
+    rc, out, _ = container_exec(cname, ["snap", "list"], check=False)
+    if rc != 0:
+        return []
+    installed = []
+    for line in out.splitlines()[1:]:  # skip the header row
+        fields = line.split()
+        if fields and fields[0] in by_store_name:
+            installed.append(by_store_name[fields[0]])
+    return sorted(installed)
+
+
+def info_container(name: str):
+    """Print detailed information about a single container."""
+    cname = _container_name(name)
+    try:
+        instance = _get_instance(cname)
+    except RuntimeError:
+        print(f"Container '{name}' not found.")
+        sys.exit(1)
+
+    username, uid, gid, home = get_container_user(cname)
+    status = instance.status
+    ipv4 = _instance_ipv4(instance) if status.lower() == "running" else ""
+
+    outbound, inbound = [], []
+    for cfg in (instance.expanded_devices or {}).values():
+        if cfg.get("type") != "proxy":
+            continue
+        listen = cfg.get("listen", "")
+        port = listen.rsplit(":", 1)[-1] if ":" in listen else listen
+        if cfg.get("bind", "host") == "host":
+            outbound.append(port)
+        else:
+            inbound.append(port)
+
+    print(f"Container: {name}")
+    print(f"  Status:      {status}")
+    print(f"  IPv4:        {ipv4 or '-'}")
+    print(f"  Mapped user: {username} (uid {uid})")
+    print(f"  Config dir:  {container_config_dir(name, home)}")
+    if outbound:
+        print(f"  Outbound (host → container): {', '.join(sorted(outbound, key=_port_sort_key))}")
+    if inbound:
+        print(f"  Inbound  (container → host): {', '.join(sorted(inbound, key=_port_sort_key))}")
+
+    if status.lower() != "running":
+        print("  Packages:    (start with 'ailab run' to list installed packages)")
+        return
+
+    installed = _installed_catalog_apps(cname)
+    print(f"  Packages:    {', '.join(installed) if installed else '(none installed)'}")
+
+    if "openclaw" in installed:
+        from . import appstore
+        from .installers.openclaw import OpenclawInstaller
+        token = OpenclawInstaller()._read_gateway_token(cname, home)
+        snap = appstore.get_snap(appstore.get_catalog(), "openclaw")
+        ports = appstore.get_ports(snap) if snap else []
+        if token and ports:
+            print(f"  openclaw:    http://localhost:{ports[0]}/#token={token}")
+
+
+def tail_logs(name: str, follow: bool = False, lines: int = 50):
+    """Tail the container's systemd journal (optionally following)."""
+    cname = _container_name(name)
+    status = _container_status(cname)
+    if status == "missing":
+        print(f"Container '{name}' not found.")
+        sys.exit(1)
+    if status != "running":
+        print(f"Container '{name}' is not running (status: {status}). Start it with: ailab run {name}")
+        sys.exit(1)
+
+    cmd = ["journalctl", "--no-pager", "-n", str(lines)]
+    if follow:
+        cmd.append("-f")
+    try:
+        container_exec(cname, cmd, stream=True, check=False)
+    except KeyboardInterrupt:
+        pass
 
 
 def completion_container_names() -> list[str]:

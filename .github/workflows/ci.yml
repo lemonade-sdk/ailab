@@ -51,6 +51,53 @@ jobs:
           ailab new --help
           ailab install --help
 
+  # ── Unit tests ──────────────────────────────────────────────────────────────
+  unit:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install package with test extras
+        run: pip install --quiet -e '.[test]'
+
+      - name: Run pytest
+        run: pytest -q
+
+  # ── Build the strict snap and smoke-test it ─────────────────────────────────
+  snap:
+    name: Build snap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # setuptools-scm / the snapcraft override-pull run `git describe
+          # --tags`, so the full history and tags must be present.
+          fetch-depth: 0
+
+      - name: Build snap
+        uses: snapcore/action-build@v1
+        id: build
+
+      - name: Install and smoke-test
+        run: |
+          sudo snap install --dangerous "${{ steps.build.outputs.snap }}"
+          ailab --version
+          ailab --help
+          # Exercises the app catalog client and the network plug; falls back
+          # to the built-in list (still exit 0) if the catalog is unreachable.
+          ailab packages
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ailab-snap
+          path: ${{ steps.build.outputs.snap }}
+
   # ── Build source package and run lintian ────────────────────────────────────
   lintian:
     name: Lintian

@@ -1,10 +1,12 @@
 """FastAPI web management interface for ailab."""
 
 import asyncio
+import contextvars
 import io
 import ipaddress as _ipaddress
 import json
 import logging
+import os
 import socket as _socket
 import sys
 import time as _time
@@ -19,7 +21,6 @@ import pylxd.exceptions
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -47,13 +48,12 @@ from ailab.container import (
     start_container,
     stop_container,
 )
+from ailab import appstore
+from ailab.network import bracket_if_ipv6, dashboard_hosts
 from ailab.installers import INSTALLERS, get_installer
-from ailab.installers.openclaw import (
-    OPENCLAW_GATEWAY_PORT,
-    OPENCLAW_WS_PATH,
-    OpenclawInstaller,
-)
+from ailab.installers.openclaw import OPENCLAW_WS_PATH, OpenclawInstaller, openclaw_dashboard_port
 from ailab.cloud import CloudTunnelManager
+from ailab.web.auth import TokenAuthMiddleware, get_or_create_token
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -70,35 +70,84 @@ _recipes_cache: list | None = None
 _recipes_cache_ts: float = 0.0
 
 
+def _port_reachable(port: int, timeout: float = 2.0) -> bool:
+    """Return True if a TCP port accepts a connection on localhost."""
+    try:
+        with _socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _detect_lemonade_port() -> int | None:
     """Return the first reachable lemonade-server port (13305 or 8000), or None."""
     for port in [13305, 8000]:
-        try:
-            with _socket.create_connection(("127.0.0.1", port), timeout=2):
-                return port
-        except OSError:
-            pass
+        if _port_reachable(port):
+            return port
     return None
+
+
+# Set in lifespan so /api/host-status can report the tunnel's live state.
+_tunnel_manager: "CloudTunnelManager | None" = None
+
+def _web_port() -> int:
+    """The port this daemon listens on (set by cmd_web / the snap wrapper)."""
+    try:
+        return int(os.environ.get("AILAB_WEB_PORT", "11500"))
+    except ValueError:
+        return 11500
+
+
+def _web_host() -> str:
+    """The address this daemon is bound to (set by cmd_web / the snap wrapper)."""
+    return os.environ.get("AILAB_WEB_HOST", "127.0.0.1")
+
+
+def _hub_host_from_env() -> str | None:
+    """Bare hostname of the configured cloud-tunnel hub, or None."""
+    host = os.environ.get("AILAB_CLOUD_HOST", "").strip()
+    if not host:
+        return None
+    for scheme in ("https://", "http://", "wss://", "ws://"):
+        if host.startswith(scheme):
+            host = host[len(scheme):]
+            break
+    return host.rstrip("/").split("/")[0] or None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    tunnel = CloudTunnelManager.from_env()
+    global _tunnel_manager
+    port = _web_port()
+    for host in dashboard_hosts(_web_host()):
+        logger.info("Dashboard URL: http://%s:%d/#token=%s", bracket_if_ipv6(host), port, API_TOKEN)
+    tunnel = None
+    try:
+        # Inject our own bearer token when the tunnel forwards hub traffic to
+        # this web port — remote browsers authenticate to the hub via GitHub
+        # OAuth and never see the local token.
+        tunnel = CloudTunnelManager.from_env(web_auth=(_web_port(), API_TOKEN))
+    except ValueError as exc:
+        # Bad cloud settings must not crash-loop the daemon; the local
+        # dashboard should keep working with the tunnel disabled.
+        logger.error("Cloud tunnel disabled — invalid configuration: %s", exc)
+    _tunnel_manager = tunnel
     if tunnel:
         await tunnel.start()
     yield
     if tunnel:
         await tunnel.stop()
+    _tunnel_manager = None
 
 
 app = FastAPI(title="ailab web interface", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# All /api/* routes (HTTP and WebSocket) require this bearer token; see
+# ailab/web/auth.py. The vite dev server proxies /api same-origin, and the
+# built frontend is served by this app itself, so no CORS middleware is
+# needed — cross-origin pages get no access at all.
+API_TOKEN = get_or_create_token()
+app.add_middleware(TokenAuthMiddleware, token=API_TOKEN, hub_host=_hub_host_from_env())
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -134,17 +183,21 @@ class ImportRecipeRequest(BaseModel):
 _get_container_user = get_container_user
 
 
+def _ipv4_from_network(network: dict | None) -> str:
+    """Return the first non-loopback IPv4 from an LXD state network dict."""
+    for iface in (network or {}).values():
+        for addr in iface.get("addresses", []):
+            if addr["family"] == "inet" and not addr["address"].startswith("127."):
+                return addr["address"]
+    return ""
+
+
 def _get_ipv4(client, cname: str) -> str:
     """Return the first non-loopback IPv4 for a container."""
     try:
-        state = client.instances.get(cname).state()
-        for iface in (state.network or {}).values():
-            for addr in iface.get("addresses", []):
-                if addr["family"] == "inet" and not addr["address"].startswith("127."):
-                    return addr["address"]
+        return _ipv4_from_network(client.instances.get(cname).state().network)
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 def _outbound_ports_from_devices(devices: dict) -> list[int]:
@@ -163,8 +216,8 @@ def _outbound_ports_from_devices(devices: dict) -> list[int]:
     return sorted(ports)
 
 
-def _container_summary(c: dict, client) -> dict:
-    """Build the summary dict for a single container metadata entry."""
+def _container_summary(c: dict) -> dict:
+    """Build the summary dict for a recursion=2 container metadata entry."""
     cname = c["name"]
     mapped_user = c.get("config", {}).get("user.ailab-mapped-user")
     if mapped_user:
@@ -178,7 +231,7 @@ def _container_summary(c: dict, client) -> dict:
     return {
         "name": cname,
         "status": c.get("status", "unknown"),
-        "ipv4": _get_ipv4(client, cname),
+        "ipv4": _ipv4_from_network((c.get("state") or {}).get("network")),
         "outbound_ports": _outbound_ports_from_devices(devices),
         "config_dir": str(container_config_dir(cname, home)),
     }
@@ -201,36 +254,59 @@ def _lxd_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail=str(exc))
 
 
+# Routes print() output to a per-operation SSE queue. A ContextVar (rather
+# than swapping the global sys.stdout) keeps concurrent operations from
+# interleaving each other's logs: asyncio.to_thread copies the calling
+# context into the worker thread, so each task_fn sees only its own queue.
+_sse_route: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "ailab_sse_route", default=None
+)
+
+
+class _StdoutRouter(io.TextIOBase):
+    """Proxy stdout: SSE-captured contexts go to their queue, rest passes through."""
+
+    def __init__(self, fallback):
+        self._fallback = fallback
+
+    def write(self, s):
+        route = _sse_route.get()
+        if route is None:
+            return self._fallback.write(s)
+        loop, queue = route
+        if s.strip():
+            # Must use call_soon_threadsafe: write() is called from a
+            # thread-pool worker, but asyncio.Queue is not thread-safe.
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "log", "msg": s.rstrip()})
+        return len(s)
+
+    def flush(self):
+        if _sse_route.get() is None:
+            self._fallback.flush()
+
+
+if not isinstance(sys.stdout, _StdoutRouter):
+    sys.stdout = _StdoutRouter(sys.stdout)
+
+
 def _sse_stream(task_fn):
     """
     Return a StreamingResponse that runs task_fn() in a thread executor,
-    capturing print() output as SSE log events.
+    capturing its print() output as SSE log events.
     """
     async def generate():
         queue: asyncio.Queue[dict] = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        old_stdout = sys.stdout
-
-        class SSECapture(io.TextIOBase):
-            def write(self, s):
-                if s.strip():
-                    # Must use call_soon_threadsafe: write() is called from a
-                    # thread-pool worker, but asyncio.Queue is not thread-safe.
-                    loop.call_soon_threadsafe(
-                        queue.put_nowait, {"type": "log", "msg": s.rstrip()}
-                    )
-                return len(s)
-
-        sys.stdout = SSECapture()
 
         async def run_task():
+            _sse_route.set((loop, queue))
             try:
-                await loop.run_in_executor(None, task_fn)
+                # to_thread (unlike run_in_executor) propagates contextvars,
+                # so the thread's print() calls route to this queue.
+                await asyncio.to_thread(task_fn)
                 await queue.put({"type": "done"})
             except Exception as exc:
                 await queue.put({"type": "error", "msg": str(exc)})
-            finally:
-                sys.stdout = old_stdout
 
         asyncio.create_task(run_task())
 
@@ -256,9 +332,11 @@ def _sse_stream(task_fn):
 async def api_list_containers():
     def _fetch():
         client = _client()
-        resp = client.api.instances.get(params={"recursion": "1"})
+        # recursion=2 includes live state (IP addresses) in one round-trip
+        # instead of one state request per container.
+        resp = client.api.instances.get(params={"recursion": "2"})
         containers = resp.json().get("metadata", [])
-        return [_container_summary(c, client) for c in containers]
+        return [_container_summary(c) for c in containers]
     return await asyncio.to_thread(_fetch)
 
 
@@ -283,16 +361,18 @@ async def api_get_container(name: str):
             listen = cfg.get("listen", "")
             connect = cfg.get("connect", "")
             bind = cfg.get("bind", "host")
+            # Inbound proxies are created with bind: "container" (LXD also
+            # accepts the alias "instance"); everything else listens on the host.
             entry = {
                 "device": dev_name,
                 "listen": listen,
                 "connect": connect,
-                "direction": "inbound" if bind == "instance" else "outbound",
+                "direction": "outbound" if bind == "host" else "inbound",
             }
-            if bind == "instance":
-                inbound.append(entry)
-            else:
+            if bind == "host":
                 outbound.append(entry)
+            else:
+                inbound.append(entry)
 
         return {
             "name": cname,
@@ -388,7 +468,7 @@ async def api_list_ports(name: str):
             bind = cfg.get("bind", "host")
             ports.append({
                 "device": dev_name,
-                "direction": "inbound" if bind == "instance" else "outbound",
+                "direction": "outbound" if bind == "host" else "inbound",
                 "listen": cfg.get("listen", ""),
                 "connect": cfg.get("connect", ""),
             })
@@ -422,42 +502,22 @@ async def api_remove_port(name: str, device_name: str):
 
 # ── Gateway URL + pair endpoints ──────────────────────────────────────────────
 
-def _read_gateway_token(token_dir: Path) -> str | None:
-    """Read the gateway shared token from the host-side gateway-token file.
-
-    token_dir is container_config_dir(name, home) / "openclaw" — a directory
-    created by the installer process with host-owned permissions, readable by
-    the snap web service regardless of LXD subuid ownership.
-    """
-    token_file = token_dir / "gateway-token"
-    if token_file.exists():
-        token = token_file.read_text().strip()
-        if token:
-            return token
-    return None
-
-
-def _get_or_create_gateway_token(token_dir: Path) -> str:
-    """Return the existing gateway shared token, or generate a new one."""
-    import secrets as _secrets
-    token = _read_gateway_token(token_dir)
-    if token:
-        return token
-    return _secrets.token_urlsafe(32)
-
-
 def _port_base_url(request: Request) -> str:
     """Return the base used to construct port-specific URLs.
 
     When the request came through the cloud tunnel the proxy injects
     'X-Ailab-Tunnel-Base' (e.g. 'https://hub.example.com/d/mydevice').
     Appending ':{port}' produces the correct tunnel URL for that port.
-    When accessed locally the header is absent and we fall back to
-    'http://localhost' so existing behaviour is unchanged.
+    When accessed directly (no tunnel) the header is absent and we use the
+    Host the browser actually connected to — 127.0.0.1 for a local
+    dashboard, but a LAN or public address if the daemon was started with
+    `ailab web --host 0.0.0.0` and is being reached from elsewhere.
     """
+    direct_base = f"http://{request.url.hostname or 'localhost'}"
+
     tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
     if not tunnel_base:
-        return "http://localhost"
+        return direct_base
 
     client_host = request.client.host if request.client else "unknown"
     try:
@@ -467,12 +527,12 @@ def _port_base_url(request: Request) -> str:
 
     if not trusted_client:
         logger.warning("Ignoring untrusted X-Ailab-Tunnel-Base header from %s", client_host)
-        return "http://localhost"
+        return direct_base
 
     parsed = _urllib_parse.urlparse(tunnel_base)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         logger.warning("Ignoring invalid X-Ailab-Tunnel-Base header: %r", tunnel_base)
-        return "http://localhost"
+        return direct_base
 
     return parsed._replace(params="", query="", fragment="").geturl().rstrip("/")
 
@@ -541,7 +601,22 @@ def _ensure_gateway_cloud_origin_sync(
 
     logger.info("Added %s to openclaw allowedOrigins in %s, restarting gateway", hub_origin, cname)
     installer = OpenclawInstaller()
-    installer._restart_gateway(cname, uid, gid, home)
+    installer.restart_service(cname)
+
+
+def _catalog_port(app_id: str) -> int:
+    """Return openclaw's dashboard port from the nimbus-app-store catalog.
+
+    Only ever called for openclaw's app_id — uses openclaw_dashboard_port()
+    rather than ports[0] so a reordered or multi-port catalog entry can't
+    silently point the token-authenticated dashboard link at the wrong port.
+    """
+    snap = appstore.get_snap(appstore.get_catalog(), app_id)
+    ports = appstore.get_ports(snap) if snap else []
+    port = openclaw_dashboard_port(ports)
+    if port is None:
+        raise HTTPException(status_code=502, detail=f"Could not resolve '{app_id}' port from the app catalog")
+    return port
 
 
 @app.get("/api/containers/{name}/gateway-url")
@@ -549,12 +624,13 @@ async def api_gateway_url(name: str, request: Request):
     """Return the openclaw dashboard URL with device token, if the container has openclaw."""
     cname = _container_name(name)
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    token_dir = container_config_dir(name, home) / "openclaw"
-    token = _read_gateway_token(token_dir)
+    installer = OpenclawInstaller()
+    token = await asyncio.to_thread(installer._read_gateway_token, cname, home)
     if not token:
-        raise HTTPException(status_code=404, detail="openclaw device token not found")
+        raise HTTPException(status_code=404, detail="openclaw gateway token not found")
+    gateway_port = await asyncio.to_thread(_catalog_port, installer.app_id)
     base = _port_base_url(request)
-    port_url = f"{base}:{OPENCLAW_GATEWAY_PORT}"
+    port_url = f"{base}:{gateway_port}"
     tunnel_base = request.headers.get("x-ailab-tunnel-base", "").strip()
     if tunnel_base:
         # When served through the cloud tunnel, openclaw's JS can't reach the
@@ -582,51 +658,40 @@ async def api_gateway_url(name: str, request: Request):
 
 @app.post("/api/containers/{name}/gateway-pair")
 async def api_gateway_pair(name: str, request: Request):
-    """Run openclaw onboard inside the container to pair the gateway device."""
+    """Ensure the openclaw gateway is configured with a token and restart it."""
     cname = _container_name(name)
     status = await asyncio.to_thread(_container_status, cname)
     if status != "running":
         raise HTTPException(status_code=409, detail=f"Container '{name}' is not running")
 
     username, uid, gid, home = await asyncio.to_thread(_get_container_user, cname)
-    token_dir = container_config_dir(name, home) / "openclaw"
+    installer = OpenclawInstaller()
 
-    if not (token_dir / "gateway-token").exists():
+    # store_name can differ from the catalog's app_id, so resolve it before
+    # checking what's actually installed — otherwise an installed snap under
+    # a different store name would be misdetected as missing.
+    snap = appstore.get_snap(appstore.get_catalog(), installer.app_id)
+    store_name = appstore.get_store_name(snap) if snap else installer.app_id
+    rc, _, _ = await asyncio.to_thread(
+        container_exec, cname, ["snap", "list", store_name], check=False,
+    )
+    if rc != 0:
         raise HTTPException(status_code=409, detail="openclaw is not installed in this container")
 
-    installer = OpenclawInstaller()
     port_base = _port_base_url(request)
+    gateway_port = await asyncio.to_thread(_catalog_port, installer.app_id)
 
     def task():
-        gateway_token = _get_or_create_gateway_token(token_dir)
-        # Refresh the host-side token file in case it was regenerated.
-        token_dir.mkdir(parents=True, exist_ok=True)
-        (token_dir / "gateway-token").write_text(gateway_token)
-        print("Configuring gateway environment...")
-        installer._configure_gateway_env(cname, uid, gid, home, gateway_token)
+        print("Re-running post-install script (config + token)...")
+        installer.run_post_install(name)
+        print("Restarting gateway service...")
+        installer.restart_service(name)
 
-        # If openclaw is already onboarded (has device state in ~/.openclaw/),
-        # just restart the gateway service — no need to re-run onboard.
-        rc, _, _ = container_exec(
-            cname,
-            ["bash", "-c", f"test -d '{home}/.openclaw/devices' || test -d '{home}/.openclaw/identity'"],
-            uid=uid, gid=gid,
-            env={"HOME": home},
-            check=False,
-        )
-        if rc == 0:
-            print("openclaw already onboarded — restarting gateway service...")
-            installer._restart_gateway(cname, uid, gid, home)
-        else:
-            print("Pairing gateway device (this takes ~10 seconds)...")
-            installer._run_onboard(cname, uid, gid, home, gateway_token)
-            installer._patch_gateway_token_in_json(cname, uid, gid, home, gateway_token)
-
-        token = _read_gateway_token(token_dir)
+        token = installer._read_gateway_token(cname, home)
         if token:
-            print(f"Paired! Dashboard: {port_base}:{OPENCLAW_GATEWAY_PORT}/#token={token}")
+            print(f"Ready! Dashboard: {port_base}:{gateway_port}/#token={token}")
         else:
-            print("Warning: pairing may not have succeeded — check container logs")
+            print("Warning: gateway configuration may not have succeeded — check container logs")
 
     return _sse_stream(task)
 
@@ -636,16 +701,49 @@ async def api_gateway_pair(name: str, request: Request):
 
 @app.get("/api/packages")
 async def api_list_packages():
-    return [
-        {"name": name, "description": cls().description}
-        for name, cls in sorted(INSTALLERS.items())
-    ]
+    catalog = await asyncio.to_thread(appstore.get_catalog)
+    result = []
+    for name, cls in sorted(INSTALLERS.items()):
+        inst = cls()
+        snap = appstore.get_snap(catalog, inst.app_id)
+        result.append({
+            "name": name,
+            "description": inst.description,
+            "ports": appstore.get_ports(snap) if snap else [],
+        })
+    return result
 
 
 @app.get("/api/users")
 async def api_list_users():
     """Return host users with UID >= 1000 (candidates for container mapping)."""
     return list_system_users()
+
+
+@app.get("/api/host-status")
+async def api_host_status():
+    """Report host AI-service availability and cloud-tunnel state for the UI."""
+    def _probe():
+        lemonade_port = _detect_lemonade_port()
+        return lemonade_port, _port_reachable(11434)
+
+    lemonade_port, ollama_ok = await asyncio.to_thread(_probe)
+
+    if _tunnel_manager is not None:
+        cloud = {
+            "configured": True,
+            "connected": _tunnel_manager.connected,
+            "host": _tunnel_manager.host,
+            "device": _tunnel_manager.device_id,
+        }
+    else:
+        cloud = {"configured": False, "connected": False}
+
+    return {
+        "lemonade": {"reachable": lemonade_port is not None, "port": lemonade_port},
+        "ollama": {"reachable": ollama_ok},
+        "cloud": cloud,
+    }
 
 
 # ── Lemonade recipes ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Container } from './types';
-import { getContainers } from './api/client';
+import { AuthError, getContainers } from './api/client';
 import { ContainerList } from './components/ContainerList';
 import { CreateModal } from './components/CreateModal';
 import { Terminal } from './components/Terminal';
@@ -8,6 +8,8 @@ import { LogStream } from './components/LogStream';
 import { PortManager } from './components/PortManager';
 import { InstallModal } from './components/InstallModal';
 import { ChangeModelModal } from './components/ChangeModelModal';
+import { HostStatus } from './components/HostStatus';
+import { Toaster } from './components/Toaster';
 
 export default function App() {
   const [containers, setContainers] = useState<Container[]>([]);
@@ -19,11 +21,18 @@ export default function App() {
   const [changeModelContainer, setChangeModelContainer] = useState<{ name: string; model: string | null } | null>(null);
   const [modelRefreshTick, setModelRefreshTick] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [authRequired, setAuthRequired] = useState(false);
 
   const refresh = () => {
     getContainers()
-      .then(setContainers)
-      .catch(console.error)
+      .then((c) => { setContainers(c); setAuthRequired(false); })
+      .catch((err) => {
+        if (err instanceof AuthError) {
+          setAuthRequired(true);
+        } else {
+          console.error(err);
+        }
+      })
       .finally(() => setLoading(false));
   };
 
@@ -54,16 +63,34 @@ export default function App() {
             <span className="text-slate-400 text-xs font-light">A box for your agents</span>
           </div>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
-        >
-          + New Container
-        </button>
+        <div className="flex items-center gap-5">
+          {!authRequired && <div className="hidden md:block"><HostStatus /></div>}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="bg-lemon-500 hover:bg-lemon-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors"
+          >
+            + New Container
+          </button>
+        </div>
       </header>
 
       <main className="p-6">
-        {loading ? (
+        {authRequired ? (
+          <div className="max-w-lg mx-auto mt-16 bg-slate-800 border border-slate-700 rounded-lg p-6 text-center">
+            <div className="text-3xl mb-3">🔒</div>
+            <h2 className="text-lg font-semibold text-white mb-2">Access token required</h2>
+            <p className="text-slate-400 text-sm mb-4">
+              This dashboard controls your AI Lab containers, so it requires an
+              access token. Get a ready-to-open link by running:
+            </p>
+            <pre className="bg-slate-950 text-lemon-500 rounded px-4 py-2 text-sm inline-block text-left">
+              sudo ailab dashboard
+            </pre>
+            <p className="text-slate-500 text-xs mt-4">
+              (Non-snap installs: <code>ailab dashboard</code> — no sudo needed.)
+            </p>
+          </div>
+        ) : loading ? (
           <div className="text-slate-400 text-center mt-16">Loading containers…</div>
         ) : (
           <ContainerList
@@ -113,6 +140,7 @@ export default function App() {
           }}
         />
       )}
+      <Toaster />
     </div>
   );
 }

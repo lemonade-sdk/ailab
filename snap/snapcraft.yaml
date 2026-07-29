@@ -2,12 +2,13 @@ name: ailab
 adopt-info: ailab
 base: core24
 title: AI Lab
+icon: snap/gui/ailab.svg
 summary: LXD-based sandboxes for running AI tools safely on Ubuntu
 description: |
   AI Lab creates lightweight LXD containers pre-wired to use AI services
-  running on your host (lemonade-server, ollama). Each container shares your
-  home directory, keeping installed software isolated from the rest of your
-  system.
+  running on your host (lemonade-server, ollama). Each container gets its own
+  isolated home directory, keeping the software an agent installs and the
+  files it touches separate from the rest of your system.
 
   Use the CLI to create and manage sandboxes:
 
@@ -17,7 +18,8 @@ description: |
 
   Or use the web management interface — a browser-based dashboard with live
   progress, an in-browser terminal, and log tailing. It runs as a background
-  daemon and is accessible at http://127.0.0.1:11500 by default.
+  daemon on http://127.0.0.1:11500 by default; run 'sudo ailab dashboard' to
+  get the tokenized URL to open it.
 
   Configure the host and port:
 

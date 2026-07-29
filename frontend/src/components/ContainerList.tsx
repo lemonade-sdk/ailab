@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Container } from '../types';
-import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
+import { Container, Package } from '../types';
+import { startContainer, stopContainer, deleteContainer, getGatewayUrl, getPackages, getPortBaseUrl, gatewayPairStream, getOpenclawModel } from '../api/client';
 import { SSEEvent } from '../types';
+import { pushToast } from '../toast';
 
 interface Props {
   containers: Container[];
@@ -14,18 +15,29 @@ interface Props {
   modelRefreshTick: number;
 }
 
-// Known tool gateway ports — containers with these ports have an app installed.
-const GATEWAY_PORTS: Record<number, string> = {
-  18789: 'openclaw',
-  3000:  'nullclaw',
-  18800: 'picoclaw',
-};
+// openclaw's own dashboard/gateway port. The catalog's `ports` list for an
+// app isn't ordered by role, so picking the token-authenticated dashboard
+// port needs to prefer this over just taking ports[0] — a reordered or
+// multi-port catalog entry would otherwise point "Open openclaw" at the
+// wrong port. Mirrors OPENCLAW_DASHBOARD_PORT in ailab/installers/openclaw.py.
+const OPENCLAW_DASHBOARD_PORT = 18789;
 
-// Port used by openclaw — URL includes an auth token so it's always fetched from the API.
-const OPENCLAW_PORT_FOR_URL = 18789;
+function openclawDashboardPort(packages: Package[]): number | null {
+  const ports = packages.find((p) => p.name === 'openclaw')?.ports ?? [];
+  if (ports.length === 0) return null;
+  return ports.includes(OPENCLAW_DASHBOARD_PORT) ? OPENCLAW_DASHBOARD_PORT : ports[0];
+}
 
-// Port used by openclaw — used to detect whether to fetch the configured model.
-const OPENCLAW_PORT = 18789;
+/** Build a port -> package-name map from the app catalog (via /api/packages). */
+function gatewayPortsFromPackages(packages: Package[]): Record<number, string> {
+  const map: Record<number, string> = {};
+  for (const pkg of packages) {
+    for (const port of pkg.ports) {
+      map[port] = pkg.name;
+    }
+  }
+  return map;
+}
 
 function StatusBadge({ status }: { status: string }) {
   const isRunning = status.toLowerCase() === 'running';
@@ -107,19 +119,25 @@ function PairModal({ name, onClose, onPaired }: { name: string; onClose: () => v
   );
 }
 
-function GatewayButton({ name, port, label }: { name: string; port: number; label: string }) {
+function GatewayButton({ name, port, label, openclawPort }: { name: string; port: number; label: string; openclawPort: number | null }) {
   const [url, setUrl] = useState<string | null>(null);
   const [notPaired, setNotPaired] = useState(false);
   const [showPairModal, setShowPairModal] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Last-resort fallback if /api/port-base-url itself can't be reached: use
+  // the address this page was actually loaded from (works for a local
+  // dashboard, a LAN/public IP, or a tunnel host alike) rather than a
+  // hardcoded 'localhost' that would be wrong for anyone but a local user.
+  const localFallback = `${window.location.protocol}//${window.location.hostname}:${port}`;
+
   const fetchUrl = () => {
     setLoading(true);
-    if (port !== OPENCLAW_PORT_FOR_URL) {
+    if (port !== openclawPort) {
       // Non-token ports: ask the server for the base URL so tunnel routing works.
       getPortBaseUrl()
         .then((base) => setUrl(`${base}:${port}`))
-        .catch(() => setUrl(`http://localhost:${port}`))
+        .catch(() => setUrl(localFallback))
         .finally(() => setLoading(false));
       return;
     }
@@ -131,13 +149,16 @@ function GatewayButton({ name, port, label }: { name: string; port: number; labe
         } else {
           getPortBaseUrl()
             .then((base) => setUrl(`${base}:${port}`))
-            .catch(() => setUrl(`http://localhost:${port}`));
+            .catch(() => setUrl(localFallback));
         }
       })
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchUrl(); }, [name, port]);
+  // openclawPort loads asynchronously from /api/packages, so it can still be
+  // null on the first render — re-fetch once it resolves, or this button can
+  // get stuck treating openclaw's port as a plain (non-token) gateway port.
+  useEffect(() => { fetchUrl(); }, [name, port, openclawPort]);
 
   useEffect(() => {
     if (!notPaired) return;
@@ -203,6 +224,8 @@ function displayModel(model: string): string {
 
 interface CardProps {
   container: Container;
+  gatewayPorts: Record<number, string>;
+  openclawPort: number | null;
   onShell: (name: string) => void;
   onLogs: (name: string) => void;
   onPorts: (name: string) => void;
@@ -216,16 +239,17 @@ interface CardProps {
 
 function ContainerCard({
   container: c,
+  gatewayPorts, openclawPort,
   onShell, onLogs, onPorts, onInstall, onChangeModel,
   onStart, onStop, onDelete, modelRefreshTick,
 }: CardProps) {
   const running = c.status.toLowerCase() === 'running';
   const gateways = c.outbound_ports
-    .filter((p) => p in GATEWAY_PORTS)
-    .map((p) => ({ port: p, label: GATEWAY_PORTS[p] }));
+    .filter((p) => p in gatewayPorts)
+    .map((p) => ({ port: p, label: gatewayPorts[p] }));
 
   const hasApp = gateways.length > 0;
-  const hasOpenclaw = c.outbound_ports.includes(OPENCLAW_PORT);
+  const hasOpenclaw = openclawPort !== null && c.outbound_ports.includes(openclawPort);
 
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -249,7 +273,7 @@ function ContainerCard({
       {running && gateways.length > 0 && (
         <div className="flex flex-col gap-1.5">
           {gateways.map(({ port, label }) => (
-            <GatewayButton key={port} name={c.name} port={port} label={label} />
+            <GatewayButton key={port} name={c.name} port={port} label={label} openclawPort={openclawPort} />
           ))}
         </div>
       )}
@@ -390,6 +414,15 @@ function ConfirmModal({ message, onConfirm, onCancel }: { message: string; onCon
 
 export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall, onChangeModel, onRefresh, modelRefreshTick }: Props) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [packages, setPackages] = useState<Package[]>([]);
+
+  useEffect(() => {
+    // On failure, keep whatever packages we already have rather than
+    // clearing to [] — a transient catalog outage would otherwise wipe out
+    // every gateway button and disable the token-based openclaw URL flow
+    // even though the container is still forwarding those ports.
+    getPackages().then(setPackages).catch(() => {});
+  }, []);
 
   if (containers.length === 0) {
     return (
@@ -400,14 +433,25 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
     );
   }
 
+  const gatewayPorts = gatewayPortsFromPackages(packages);
+  const openclawPort = openclawDashboardPort(packages);
+
   const handleStart = async (name: string) => {
-    try { await startContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try { await startContainer(name); onRefresh(); }
+    catch (e) { pushToast(`Could not start "${name}": ${String(e)}`); }
   };
   const handleStop = async (name: string) => {
-    try { await stopContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try { await stopContainer(name); onRefresh(); }
+    catch (e) { pushToast(`Could not stop "${name}": ${String(e)}`); }
   };
   const handleDelete = async (name: string) => {
-    try { await deleteContainer(name); onRefresh(); } catch (e) { alert(String(e)); }
+    try {
+      await deleteContainer(name);
+      pushToast(`Deleted "${name}".`, 'success');
+      onRefresh();
+    } catch (e) {
+      pushToast(`Could not delete "${name}": ${String(e)}`);
+    }
     setConfirmDelete(null);
   };
 
@@ -418,6 +462,8 @@ export function ContainerList({ containers, onShell, onLogs, onPorts, onInstall,
           <ContainerCard
             key={c.name}
             container={c}
+            gatewayPorts={gatewayPorts}
+            openclawPort={openclawPort}
             onShell={onShell}
             onLogs={onLogs}
             onPorts={onPorts}
