@@ -380,11 +380,11 @@ def build_shell_welcome(container_name: str) -> str:
             ]
         else:
             lines += [
-                "openclaw is installed but needs to be set up.",
-                "Run the setup wizard:",
-                "  openclaw onboard",
+                "openclaw is installed but its onboarding didn't finish.",
+                "Make sure lemonade-server is running on the host, then re-run",
+                "onboarding from the host:",
+                f"  ailab install {container_name} openclaw",
                 "",
-                "  This connects openclaw to your local LLM (lemonade/ollama).",
                 "  After onboarding, launch the TUI with:  openclaw",
             ]
     else:
