@@ -20,6 +20,19 @@ from ..container import (
     start_container,
 )
 
+_SNAP_PATH = "/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _user_env(uid: int, home: str) -> dict[str, str]:
+    return {
+        "HOME": home,
+        "XDG_RUNTIME_DIR": f"/run/user/{uid}",
+        "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
+        # Classic snaps' commands (e.g. the catalog's `<app>.lemonade`
+        # onboard commands) live in /snap/bin.
+        "PATH": _SNAP_PATH,
+    }
+
 
 class CatalogAppInstaller:
     """Base class for installers driven by the nimbus-app-store catalog.
@@ -84,17 +97,19 @@ class CatalogAppInstaller:
             print(f"Adding port proxies ({', '.join(str(p) for p in ports)})...")
             self._add_port_proxies(cname, ports)
 
-        env = {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-        }
+        env = _user_env(uid, home)
 
         onboard = appstore.get_onboard_cmd(snap)
         if onboard:
             cmd, args = onboard
             print(f"Running onboard command: {cmd} {' '.join(args)}...")
-            container_exec(cname, [cmd, *args], uid=uid, gid=gid, env=env, check=False)
+            exit_code, _, stderr = container_exec(
+                cname, [cmd, *args], uid=uid, gid=gid, env=env, check=False,
+            )
+            if exit_code != 0:
+                print(f"  Warning: onboard command exited {exit_code} (non-fatal)")
+                if stderr.strip():
+                    print(f"  {stderr.strip()}")
 
         post_install_url = appstore.get_post_install_script_url(catalog, snap)
         if post_install_url:
@@ -148,11 +163,7 @@ class CatalogAppInstaller:
         service_name = appstore.get_service_name(snap) if snap else None
         if not service_name:
             return
-        env = {
-            "HOME": home,
-            "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-            "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-        }
+        env = _user_env(uid, home)
         self._service_action(cname, uid, gid, env, service_name, "restart")
 
     def _add_port_proxies(self, cname: str, ports: list[int]):
@@ -184,12 +195,7 @@ class CatalogAppInstaller:
             cname,
             ["bash", tmp_path],
             uid=uid, gid=gid,
-            env={
-                "HOME": home,
-                "XDG_RUNTIME_DIR": f"/run/user/{uid}",
-                "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{uid}/bus",
-                "PATH": "/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            },
+            env=_user_env(uid, home),
             check=False,
         )
         if exit_code != 0:

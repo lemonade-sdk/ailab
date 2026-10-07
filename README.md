@@ -309,7 +309,9 @@ Every package uses lemonade-server as its primary provider via its
 OpenAI-compatible API, auto-detected on `localhost:13305` (>= 10.1) or
 `localhost:8000` (< 10.1), and most also configure ollama on
 `localhost:11434` as a secondary provider — each snap's own onboarding tool
-(`<package>.lemonade --auto`) handles this during install.
+(`<package>.lemonade --auto`) handles this during install, followed by the
+catalog's per-package post-install script (model selection, gateway binding,
+service setup).
 
 ## How It Works
 

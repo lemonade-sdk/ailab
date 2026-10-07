@@ -81,3 +81,16 @@ def test_service_action_never_uses_a_shell(monkeypatch):
 
     assert all("bash" not in cmd for cmd in calls), calls
     assert any(cmd == ["systemctl", "--user", "restart", malicious_service_name] for cmd in calls), calls
+
+
+def test_onboard_command_runs_with_snap_bin_on_path(monkeypatch):
+    calls = _patch_common(monkeypatch)
+    SNAP["onboard_cmd"] = "nullclaw.lemonade --auto"
+    try:
+        FakeInstaller().install("box")
+    finally:
+        del SNAP["onboard_cmd"]
+
+    onboard_kwargs = next(k for cmd, k in calls if cmd[0] == "nullclaw.lemonade")
+    assert onboard_kwargs["env"]["PATH"].startswith("/snap/bin:")
+    assert onboard_kwargs["uid"] == 1000

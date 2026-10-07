@@ -31,7 +31,11 @@ class OpenclawInstaller(CatalogAppInstaller):
     app_id = "openclaw"
     name = "openclaw"
     description = "AI coding agent with local-first LLM support (lemonade/ollama)"
-    onboard_cmd = "openclaw onboard"
+    # No interactive wizard after install: the catalog's onboard command
+    # (openclaw.lemonade --auto) and post-install script already configure
+    # the lemonade provider and gateway token, and `openclaw onboard` would
+    # overwrite that config.
+    onboard_cmd = None
 
     def _read_gateway_token(self, cname: str, home: str) -> str | None:
         """Read gateway.auth.token from openclaw.json inside the container.
